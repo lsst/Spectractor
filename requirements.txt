@@ -5,7 +5,7 @@ pandas
 pyfftw
 numexpr
 astropy>=3.2
-photutils
+photutils>=0.7
 astroquery
 coloredlogs
 scikit-image
@@ -19,3 +19,4 @@ iminuit
 coverage
 configparser
 coveralls
+nose
