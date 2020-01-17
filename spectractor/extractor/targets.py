@@ -263,6 +263,8 @@ class Star(Target):
                 # print 'Loading target %s from NED...' % self.label
                 ned = Ned.query_object(self.label)
                 hdulists = Ned.get_spectra(self.label, show_progress=False)
+                if len(ned) == 0 or hdulists == []:
+                    raise RuntimeError(f"Failed to get retrieve spectrum for {self.label} from Ned")
                 self.redshift = ned['Redshift'][0]
                 self.emission_spectrum = True
                 self.hydrogen_only = False
