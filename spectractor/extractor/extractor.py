@@ -9,6 +9,12 @@ from spectractor.extractor.spectrum import (Spectrum, extract_spectrum_from_imag
 from spectractor.tools import ensure_dir
 
 
+def dumpParameters():
+    for item in dir(parameters):
+        if not item.startswith("__"):
+            print(item, getattr(parameters, item))
+
+
 def Spectractor(file_name, output_directory, target_label, guess=None, disperser_label="", config='./config/ctio.ini',
                 atmospheric_lines=True, line_detection=True):
     """ Spectractor
