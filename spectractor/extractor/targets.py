@@ -383,6 +383,8 @@ class Star(Target):
         plt.legend()
         if parameters.DISPLAY:  # pragma: no cover
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
 
 if __name__ == "__main__":

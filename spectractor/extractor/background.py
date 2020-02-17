@@ -25,6 +25,8 @@ def remove_image_background_sextractor(data, sigma=3.0, box_size=(50, 50), filte
         im = ax[1].imshow(np.log10(1 + data_wo_bkg), origin='lower')
         plt.colorbar(im, ax=ax[1])
         plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
     return data_wo_bkg
 
 
@@ -119,6 +121,8 @@ def extract_spectrogram_background_fit1D(data, err, deg=1, ws=(20, 30), pixel_st
         fig.tight_layout()
         if parameters.DISPLAY:  # pragma: no cover
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
     return bgd_model_func
 
 
@@ -209,6 +213,8 @@ def extract_spectrogram_background_sextractor(data, err, ws=(20, 30), mask_signa
         fig.tight_layout()
         if parameters.DISPLAY:  # pragma: no cover
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
     return bgd_model_func
 
 
@@ -292,6 +298,8 @@ def extract_spectrogram_background_poly2D(data, deg=1, ws=(20, 30), pixel_step=1
         fig.tight_layout()
         if parameters.DISPLAY:  # pragma: no cover
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
     return bgd_model_func
 
 

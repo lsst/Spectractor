@@ -277,7 +277,8 @@ class Image(object):
         plt.legend()
         if parameters.DISPLAY:  # pragma: no cover
             plt.show()
-
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
 def load_CTIO_image(image):
     """Specific routine to load CTIO fits files and load their data and properties for Spectractor.
@@ -453,6 +454,8 @@ def find_target(image, guess=None, rotated=False, use_wcs=True):
                 plot_image_simple(plt.gca(), data=sub_image, scale="lin", title="", units=image.units,
                                   target_pixcoords=[theX-x0+Dx, theY-y0+Dy])
                 plt.show()
+            if parameters.PdfPages:
+                parameters.PdfPages.savefig()
         else:
             my_logger.info(f"\n\tNo WCS {wcs_file_name} available, use 2D fit to find target pixel position.")
     if target_pixcoords[0] == -1 and target_pixcoords[1] == -1:
@@ -616,6 +619,8 @@ def find_target_1Dprofile(image, sub_image, guess):
             plt.show()
         if parameters.LSST_SAVEFIGPATH:  # pragma: no cover
             f.savefig(os.path.join(parameters.LSST_SAVEFIGPATH, 'namethisplot1.pdf'))
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
     return avX, avY
 
 
@@ -726,6 +731,8 @@ def find_target_2Dprofile(image, sub_image, guess, sub_errors=None):
             plt.show()
         if parameters.LSST_SAVEFIGPATH:  # pragma: no cover
             f.savefig(os.path.join(parameters.LSST_SAVEFIGPATH, 'namethisplot2.pdf'))
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
     return new_avX, new_avY
 
 
@@ -831,6 +838,8 @@ def compute_rotation_angle_hessian(image, deg_threshold=10, width_cut=parameters
             plt.show()
         if parameters.LSST_SAVEFIGPATH:  # pragma: no cover
             f.savefig(os.path.join(parameters.LSST_SAVEFIGPATH, 'rotation_hessian.pdf'))
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
     return theta_median
 
 
@@ -901,6 +910,8 @@ def turn_image(image):
             plt.show()
         if parameters.LSST_SAVEFIGPATH:  # pragma: no cover
             f.savefig(os.path.join(parameters.LSST_SAVEFIGPATH, 'rotated_image.pdf'))
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
 
 if __name__ == "__main__":

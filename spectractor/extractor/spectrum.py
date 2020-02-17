@@ -207,6 +207,8 @@ class Spectrum:
         ax.legend(loc='best')
         if self.filters is not None:
             ax.get_legend().set_title(self.filters)
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
         if parameters.DISPLAY:
             if live_fit:
                 plt.draw()
@@ -263,6 +265,8 @@ class Spectrum:
                           target_pixcoords=target_pixcoords, aspect=aspect, vmin=vmin, vmax=vmax, cmap=cmap)
         if parameters.DISPLAY:
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
     def save_spectrum(self, output_file_name, overwrite=False):
         """Save the spectrum into a fits file (data, error and wavelengths).
@@ -959,6 +963,9 @@ def calibrate_spectrum_with_lines(spectrum):
         plt.ylabel('D [mm]')
         plt.legend()
         plt.show()
+    if parameters.PdfPages:
+        parameters.PdfPages.savefig()
+
     # now minimize around the global minimum found previously
     # res = opt.minimize(shift_minimizer, start, args=(), method='L-BFGS-B',
     #                    options={'maxiter': 200, 'ftol': 1e-3},
@@ -1184,6 +1191,8 @@ def extract_spectrum_from_image(image, spectrum, w=10, ws=(20, 30), right_edge=p
             plt.show()
         if parameters.LSST_SAVEFIGPATH:
             fig.savefig(os.path.join(parameters.LSST_SAVEFIGPATH, 'fwhm.pdf'))
+    if parameters.PdfPages:
+        parameters.PdfPages.savefig()
 
     # Summary plot
     if parameters.DEBUG or parameters.LSST_SAVEFIGPATH:
@@ -1221,6 +1230,8 @@ def extract_spectrum_from_image(image, spectrum, w=10, ws=(20, 30), right_edge=p
             plt.show()
         if parameters.LSST_SAVEFIGPATH:
             fig.savefig(os.path.join(parameters.LSST_SAVEFIGPATH, 'spectrum.pdf'))
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
     return spectrum
 
 
