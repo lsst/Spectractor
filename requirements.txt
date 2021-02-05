@@ -5,7 +5,7 @@ pandas
 # pyfftw
 numexpr
 astropy>=3.2
-photutils
+photutils>=0.7
 astroquery
 coloredlogs
 scikit-image
@@ -15,8 +15,9 @@ emcee==3.0rc2
 tqdm
 mpi4py
 schwimmbad
-iminuit
+iminuit<2.0
 coverage<5.0,>=3.6
 configparser
 coveralls
 pyyaml
+nose

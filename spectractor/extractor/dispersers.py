@@ -361,11 +361,17 @@ class Grating:
             a = np.loadtxt(filename)
             self.N_input = a[0]
             self.N_err = a[1]
+        else:
+            raise FileNotFoundError(f"Failed to load {filename} for {self.label}")
+
         filename = self.data_dir + self.label + "/full_name.txt"
         if os.path.isfile(filename):
             with open(filename, 'r') as f:
-                for line in f:
+                for line in f:  # MFL: you really just want the last line of the file?
                     self.full_name = line.rstrip('\n')
+        else:
+            raise FileNotFoundError(f"Failed to load {filename} for {self.label}")
+
         filename = self.data_dir + self.label + "/transmission.txt"
         if os.path.isfile(filename):
             a = np.loadtxt(filename)
@@ -375,12 +381,18 @@ class Grating:
         else:
             self.transmission = lambda x: np.ones_like(x).astype(float)
             self.transmission_err = lambda x: np.zeros_like(x).astype(float)
+            msg = f"Failed to load {filename} for {self.label}, using default (perfect) transmission"
+            self.my_logger.info(msg)
+
         filename = self.data_dir + self.label + "/hologram_center.txt"
         if os.path.isfile(filename):
             lines = [ll.rstrip('\n') for ll in open(filename)]
             self.theta_tilt = float(lines[1].split(' ')[2])
         else:
             self.theta_tilt = 0
+            msg = f"Failed to load {filename} for {self.label}, using default tilt of {self.theta_tilt}"
+            self.my_logger.info(msg)
+
         if verbose:
             self.my_logger.info(f'\n\tGrating plate center at x0 = {self.plate_center[0]:.1f} '
                                 f'and y0 = {self.plate_center[1]:.1f} '
@@ -532,6 +544,8 @@ class Grating:
         plt.legend(loc='best')
         if parameters.DISPLAY:
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
 
 class Hologram(Grating):

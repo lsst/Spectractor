@@ -100,6 +100,9 @@ def source_detection(data_wo_bkg, sigma=3.0, fwhm=3.0, threshold_std_factor=5, m
         if parameters.DISPLAY:
             # fig.tight_layout()
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
+
     return sources
 
 
@@ -214,6 +217,8 @@ def plot_shifts_histograms(dra, ddec):
     # ax[1].legend()
     if parameters.DISPLAY:
         plt.show()
+    if parameters.PdfPages:
+        parameters.PdfPages.savefig()
 
 
 class Astrometry(Image):
@@ -538,6 +543,8 @@ class Astrometry(Image):
         if not no_plot and parameters.DISPLAY:
             # fig.tight_layout()
             plt.show()
+            if parameters.PdfPages:
+                parameters.PdfPages.savefig()
 
     def get_sources_radec_positions(self):
         """Gives the RA,DEC position of the detected sources.
@@ -671,6 +678,8 @@ class Astrometry(Image):
         if parameters.DISPLAY:
             # fig.tight_layout()
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
     def set_constraints(self, min_stars=100, flux_log10_threshold=0.1, min_range=3 * u.arcsec, max_range=5 * u.arcmin,
                         max_sep=1 * u.arcsec):
@@ -784,6 +793,8 @@ class Astrometry(Image):
         ax[1].legend()
         if parameters.DISPLAY:
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
     def merge_wcs_with_new_exposure(self, log_file=None):
         """Merge the WCS solution with the current FITS file image.
@@ -927,6 +938,8 @@ class Astrometry(Image):
         if parameters.DISPLAY:
             fig.tight_layout()
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
     def run_simple_astrometry(self, extent=None, sources=None):
         """Build a World Coordinate System (WCS) using astrometry.net library given an exposure as a FITS file.

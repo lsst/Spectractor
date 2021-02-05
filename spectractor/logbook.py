@@ -137,6 +137,8 @@ class LogBook:
         self.df.plot(x='date', y=column_names)
         if parameters.DISPLAY:
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
 
 if __name__ == "__main__":

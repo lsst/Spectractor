@@ -158,6 +158,8 @@ class FitWorkspace:
         plt.grid()
         if parameters.DISPLAY:
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
     def chain2likelihood(self, pdfonly=False, walker_index=-1):
         if walker_index >= 0:
@@ -325,6 +327,8 @@ class FitWorkspace:
         plt.subplots_adjust(hspace=0)
         if parameters.DISPLAY:
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
         figure_name = self.emcee_filename.replace('.h5', '_convergence.pdf')
         print(f'Save figure: {figure_name}')
         fig.savefig(figure_name, dpi=100)
@@ -363,6 +367,8 @@ class FitWorkspace:
         fig = plt.figure()
         rho = self.compute_correlation_matrix()
         im = plt.imshow(rho, interpolation="nearest", cmap='bwr', vmin=-1, vmax=1)
+        if parameters.PdfPages:  # is this going to be a duplicate? MFL
+            parameters.PdfPages.savefig()
         if ipar is None:
             ipar = np.arange(0, self.cov.shape[0]).astype(int)
         self.rho = rho
@@ -377,6 +383,8 @@ class FitWorkspace:
             figname = self.filename.replace(self.filename.split('.')[-1], "_correlation.pdf")
             self.my_logger.info(f"Save figure {figname}.")
             fig.savefig(figname, dpi=100, bbox_inches='tight')
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()  # args from the above here MFL
         if parameters.DISPLAY:
             if self.live_fit:
                 plt.draw()
@@ -551,6 +559,8 @@ def plot_gradient_descent(fit_workspace, costs, params_table):
         fig.savefig(figname, dpi=100, bbox_inches='tight')
     if parameters.DISPLAY:
         plt.show()
+    if parameters.PdfPages:  # args from the above? MFL
+        parameters.PdfPages.savefig()
 
     fit_workspace.simulate(*fit_workspace.p)
     fit_workspace.live_fit = False

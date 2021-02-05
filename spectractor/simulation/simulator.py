@@ -314,6 +314,8 @@ class SpectrogramModel(Spectrum):
             plt.title(f"{new_x0}")
             plt.legend()
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
         return lambdas, dispersion_law, dispersion_law_order2
 
@@ -423,6 +425,9 @@ class SpectrogramModel(Spectrum):
             ax[2].legend()
             fig.tight_layout()
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
+
         return self.lambdas, self.data, self.err
 
     def simulate_FFT(self, A1=1.0, A2=0., ozone=300, pwv=5, aerosols=0.05, D=parameters.DISTANCE2CCD,
@@ -589,6 +594,9 @@ class SpectrogramModel(Spectrum):
             ax[1].set_ylabel('Y [pixels]')
             fig.tight_layout()
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
+
         return self.lambdas, self.data, self.err
 
 
@@ -647,6 +655,8 @@ class SpectrumSimGrid():
         plt.title("Spectra for Atmospheric variations")
         if parameters.DISPLAY:
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
     def plot_spectra_img(self):
         plt.figure()
@@ -658,6 +668,8 @@ class SpectrumSimGrid():
         cbar.set_label("Flux [ADU/s]")
         plt.grid(True)
         if parameters.DISPLAY: plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
     def save_spectra(self, filename):
 

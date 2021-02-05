@@ -232,6 +232,8 @@ class SpectrogramFitWorkspace(FitWorkspace):
         else:
             if parameters.DISPLAY and self.verbose:
                 plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
         if parameters.SAVE:
             figname = self.filename.replace(self.filename.split('.')[-1], "_bestfit.pdf")
             self.my_logger.info(f"\n\tSave figure {figname}.")
@@ -263,6 +265,8 @@ def plot_psf_poly_params(psf_poly_params):
 
         plt.legend()
         plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
 
 def run_spectrogram_minimisation(fit_workspace, method="newton"):

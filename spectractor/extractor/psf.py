@@ -850,6 +850,8 @@ class ChromaticPSF:
         # fig.subplots_adjust(hspace=0)
         if parameters.DISPLAY:  # pragma: no cover
             plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
     def plot_chromatic_PSF1D_residuals(self, bgd, data, data_errors, guess=None, live_fit=False, title=""):
         """Plot the residuals after fit_chromatic_PSF1D function.
@@ -896,6 +898,8 @@ class ChromaticPSF:
                 plt.close()
             else:
                 plt.show()
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
         plt.close()
 
     def fit_transverse_PSF1D_profile(self, data, err, w, ws, pixel_step=1, bgd_model_func=None, saturation=None,
@@ -1350,7 +1354,7 @@ class ChromaticPSF1DFitWorkspace(FitWorkspace):
             # xx, yy = np.meshgrid(np.arange(Nx), pixels)
             self.bgd = self.bgd_model_func(np.arange(self.Nx), self.pixels)
         self.data = self.data - self.bgd
-        self.bgd_std = float(np.std(np.random.poisson(self.bgd)))
+        self.bgd_std = float(np.std(np.random.poisson(np.abs(self.bgd))))
 
         # crop spectrogram to fit faster
         self.bgd_width = parameters.PIXWIDTH_BACKGROUND + parameters.PIXDIST_BACKGROUND - parameters.PIXWIDTH_SIGNAL
@@ -1467,6 +1471,8 @@ class ChromaticPSF1DFitWorkspace(FitWorkspace):
             figname = self.filename.replace(self.filename.split('.')[-1], "_bestfit.pdf")
             self.my_logger.info(f"\n\tSave figure {figname}.")
             fig.savefig(figname, dpi=100, bbox_inches='tight')
+        if parameters.PdfPages:
+            parameters.PdfPages.savefig()
 
 
 class ChromaticPSF2D(ChromaticPSF):
@@ -1811,6 +1817,8 @@ def plot_transverse_PSF1D_profile(x, indices, bgd_indices, data, err, fit=None, 
             plt.close()
         else:
             plt.show()
+    if parameters.PdfPages:
+        parameters.PdfPages.savefig()
     plt.close()
 
 

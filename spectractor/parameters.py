@@ -37,8 +37,10 @@ def __getattr__(name):
 mypath = os.path.dirname(__file__)
 DISPERSER_DIR = os.path.join(mypath, "extractor/dispersers/")
 THROUGHPUT_DIR = os.path.join(mypath, "simulation/CTIOThroughput/")
-ASTROMETRYNET_DIR = os.getenv('ASTROMETRYNET_DIR') + '/'
-LIBRADTRAN_DIR = os.getenv('LIBRADTRAN_DIR') + '/'
+if os.getenv('ASTROMETRYNET_DIR'):
+    ASTROMETRYNET_DIR = os.getenv('ASTROMETRYNET_DIR') + '/'
+if os.getenv('LIBRADTRAN_DIR'):
+    LIBRADTRAN_DIR = os.getenv('LIBRADTRAN_DIR') + '/'
 
 # CCD characteristics
 CCD_IMSIZE = 2048  # size of the image in pixel
