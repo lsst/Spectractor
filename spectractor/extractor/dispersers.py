@@ -145,7 +145,7 @@ def get_delta_pix_ortho(deltaX, x0, D=parameters.DISTANCE2CCD):
     >>> get_delta_pix_ortho(delta, [parameters.CCD_IMSIZE/2,  parameters.CCD_IMSIZE/2], D=D)
     500.0
     >>> get_delta_pix_ortho(delta, [500,500], D=D)
-    497.66545567320992
+    497.6654556732099
     """
     theta0 = get_theta0(x0)
     deltaX0 = np.tan(theta0) * D / parameters.CCD_PIXEL2MM
@@ -291,8 +291,8 @@ class Grating:
         >>> print(g.N_input)
         400
         >>> g = Grating(400, label="Ron400", data_dir=parameters.DISPERSER_DIR)
-        >>> print(g.N_input)
-        400.869182487
+        >>> print(f"{g.N_input:6f}")
+        400.869182
         >>> assert g.D is parameters.DISTANCE2CCD
         """
         self.my_logger = set_logger(self.__class__.__name__)
@@ -306,6 +306,7 @@ class Grating:
         self.theta_tilt = 0
         self.transmission = None
         self.transmission_err = None
+        self.ratio_order_2over1 = None
         self.load_files(verbose=verbose)
 
     def N(self, x):
@@ -342,6 +343,7 @@ class Grating:
         --------
 
         The files exist:
+
         >>> g = Grating(400, label='Ron400')
         >>> g.N_input
         400.86918248709316
@@ -349,6 +351,7 @@ class Grating:
         -0.277
 
         The files do not exist:
+
         >>> g = Grating(400, label='XXX')
         >>> g.N_input
         400
@@ -361,7 +364,7 @@ class Grating:
             a = np.loadtxt(filename)
             self.N_input = a[0]
             self.N_err = a[1]
-        else:
+        else:  # MFL this changes the behaviour, but I think in a good way. Lets talk
             raise FileNotFoundError(f"Failed to load {filename} for {self.label}")
 
         filename = self.data_dir + self.label + "/full_name.txt"
@@ -369,7 +372,7 @@ class Grating:
             with open(filename, 'r') as f:
                 for line in f:  # MFL: you really just want the last line of the file?
                     self.full_name = line.rstrip('\n')
-        else:
+        else:  # MFL this changes the behaviour, but I think in a good way. Lets talk
             raise FileNotFoundError(f"Failed to load {filename} for {self.label}")
 
         filename = self.data_dir + self.label + "/transmission.txt"
@@ -384,6 +387,14 @@ class Grating:
             msg = f"Failed to load {filename} for {self.label}, using default (perfect) transmission"
             self.my_logger.info(msg)
 
+        filename = self.data_dir + self.label + "/ratio_order_2over1.txt"
+        if os.path.isfile(filename):
+            a = np.loadtxt(filename)
+            l, t = a.T
+            self.ratio_order_2over1 = interpolate.interp1d(l, t, bounds_error=False, kind="linear",
+                                                           fill_value=(t[0], t[-1]))
+        else:
+            self.ratio_order_2over1 = lambda x: parameters.GRATING_ORDER_2OVER1 * np.ones_like(x).astype(float)
         filename = self.data_dir + self.label + "/hologram_center.txt"
         if os.path.isfile(filename):
             lines = [ll.rstrip('\n') for ll in open(filename)]
@@ -469,10 +480,10 @@ class Grating:
         >>> deltaX = np.arange(0,1000,1).astype(float)
         >>> lambdas = disperser.grating_pixel_to_lambda(deltaX, x0, order=1)
         >>> print(lambdas[:5])
-        [ 0.          1.45454532  2.90909063  4.36363511  5.81817793]
+        [0.         1.45454532 2.90909063 4.36363511 5.81817793]
         >>> pixels = disperser.grating_lambda_to_pixel(lambdas, x0, order=1)
         >>> print(pixels[:5])
-        [ 0.  1.  2.  3.  4.]
+        [0. 1. 2. 3. 4.]
         """
         theta = self.refraction_angle(deltaX, x0)
         theta0 = get_theta0(x0)
@@ -498,10 +509,10 @@ class Grating:
         >>> deltaX = np.arange(0,1000,1).astype(float)
         >>> lambdas = disperser.grating_pixel_to_lambda(deltaX, x0, order=1)
         >>> print(lambdas[:5])
-        [ 0.          1.45454532  2.90909063  4.36363511  5.81817793]
+        [0.         1.45454532 2.90909063 4.36363511 5.81817793]
         >>> pixels = disperser.grating_lambda_to_pixel(lambdas, x0, order=1)
         >>> print(pixels[:5])
-        [ 0.  1.  2.  3.  4.]
+        [0. 1. 2. 3. 4.]
         """
         lambdas = np.copy(lambdas)
         theta0 = get_theta0(x0)
@@ -644,6 +655,7 @@ class Hologram(Grating):
         --------
 
         The files exist:
+
         >>> h = Hologram(label='HoloPhP')
         >>> h.N((500,500))
         345.4794168822986
@@ -653,6 +665,7 @@ class Hologram(Grating):
         [856.004, 562.34]
 
         The files do not exist:
+
         >>> h = Hologram(label='XXX')
         >>> h.N((500,500))
         350
@@ -668,6 +681,9 @@ class Hologram(Grating):
         if os.path.isfile(filename):
             a = np.loadtxt(filename)
             self.N_x, self.N_y, self.N_data = a.T
+            if parameters.CCD_REBIN > 1:
+                self.N_x /= parameters.CCD_REBIN
+                self.N_y /= parameters.CCD_REBIN
             N_interp = interpolate.interp2d(self.N_x, self.N_y, self.N_data, kind='cubic')
             self.N_fit = fit_poly2d(self.N_x, self.N_y, self.N_data, order=2)
             self.N_interp = lambda x: float(N_interp(x[0], x[1]))
@@ -695,6 +711,9 @@ class Hologram(Grating):
         if os.path.isfile(filename):
             a = np.loadtxt(filename)
             self.theta_x, self.theta_y, self.theta_data = a.T
+            if parameters.CCD_REBIN > 1:
+                self.theta_x /= parameters.CCD_REBIN
+                self.theta_y /= parameters.CCD_REBIN
             theta_interp = interpolate.interp2d(self.theta_x, self.theta_y, self.theta_data, kind='cubic')
             self.theta = lambda x: float(theta_interp(x[0], x[1]))
         else:
@@ -725,8 +744,5 @@ class Hologram(Grating):
 
 if __name__ == "__main__":
     import doctest
-
-    if np.__version__ >= "1.14.0":
-        np.set_printoptions(legacy="1.13")
 
     doctest.testmod()

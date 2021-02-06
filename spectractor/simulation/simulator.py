@@ -1,21 +1,3 @@
-"""
-simulator
-=============----
-
-author : Sylvie Dagoret-Campagne, Jérémy Neveu
-affiliation : LAL/CNRS/IN2P3/FRANCE
-Collaboration : DESC-LSST
-
-Purpose : Simulate a series of spectra for each experimental spectra measured by auxiliary telescope.
-Structure in parallel to Spectractor.
-For each experimental spectra a fits file image is generated which holds all possible auxiliary telescope spectra
-corresponding to different conditions in aerosols, pwv, and ozone.
-
-creation date : April 18th
-Last update : July 2018
-
-"""
-
 import os
 import copy
 import numpy as np
@@ -23,23 +5,22 @@ import matplotlib.pyplot as plt
 from astropy.io import fits
 
 from scipy.interpolate import interp1d
-from scipy.integrate import quad
 
-from spectractor.extractor.images import Image
 from spectractor.extractor.spectrum import Spectrum
-from spectractor.extractor.dispersers import Hologram
+from spectractor.extractor.dispersers import Grating, Hologram
 from spectractor.extractor.targets import Target
-from spectractor.extractor.psf import PSF2D
-from spectractor.tools import fftconvolve_gaussian, ensure_dir, rebin
+from spectractor.extractor.psf import load_PSF
+from spectractor.tools import fftconvolve_gaussian, ensure_dir
 from spectractor.config import set_logger
 from spectractor.simulation.throughput import TelescopeTransmission
 from spectractor.simulation.atmosphere import Atmosphere, AtmosphereGrid
 import spectractor.parameters as parameters
+from spectractor.simulation.adr import adr_calib, flip_and_rotate_adr_to_image_xy_coordinates
 
 
 class SpectrumSimulation(Spectrum):
 
-    def __init__(self, spectrum, atmosphere, telescope, disperser):
+    def __init__(self, spectrum, atmosphere, telescope, disperser, fast_sim=True):
         """Class to simulate cross spectrum.
 
         Parameters
@@ -52,6 +33,8 @@ class SpectrumSimulation(Spectrum):
             Telescope transmission.
         disperser: Grating
             Disperser instance.
+        fast_sim: bool, optional
+            If True, do a fast simulation without integrating within the wavelength bins (default: True).
 
         """
         Spectrum.__init__(self)
@@ -61,11 +44,18 @@ class SpectrumSimulation(Spectrum):
         self.disperser = disperser
         self.telescope = telescope
         self.atmosphere = atmosphere
+        self.fast_sim = fast_sim
+        # save original pixel distances to zero order
+        # self.disperser.grating_lambda_to_pixel(self.lambdas, x0=self.x0, order=1)
+        # now reset data
         self.lambdas = None
-        self.data = None
+        self.lambdas_order2 = None
         self.err = None
         self.model = lambda x: np.zeros_like(x)
         self.model_err = lambda x: np.zeros_like(x)
+        lbdas_sed = self.target.wavelengths[0]
+        sub = np.where((lbdas_sed > parameters.LAMBDA_MIN) & (lbdas_sed < parameters.LAMBDA_MAX))
+        self.lambdas_step = min(parameters.LAMBDA_STEP, np.min(lbdas_sed[sub]))
 
     def simulate_without_atmosphere(self, lambdas):
         """Compute the spectrum of an object and its uncertainties
@@ -85,7 +75,6 @@ class SpectrumSimulation(Spectrum):
             The spectrum uncertainties in Target units.
         """
         self.lambdas = lambdas
-        self.err = np.zeros_like(lambdas)
         self.lambdas_binwidths = np.gradient(lambdas)
         self.data = self.disperser.transmission(lambdas)
         self.data *= self.telescope.transmission(lambdas)
@@ -94,10 +83,10 @@ class SpectrumSimulation(Spectrum):
         idx = np.where(self.telescope.transmission(lambdas) > 0)[0]
         self.err[idx] = self.telescope.transmission_err(lambdas)[idx] / self.telescope.transmission(lambdas)[idx]
         self.err[idx] *= self.data[idx]
-        # self.data *= self.lambdas*self.lambdas_binwidths
         return self.data, self.err
 
-    def simulate(self, A1=1.0, A2=0., ozone=300, pwv=5, aerosols=0.05, reso=0., D=parameters.DISTANCE2CCD, shift=0.):
+    def simulate(self, A1=1.0, A2=0., ozone=300, pwv=5, aerosols=0.05, reso=0.,
+                 D=parameters.DISTANCE2CCD, shift_x=0., B=0.):
         """Simulate the cross spectrum of an object and its uncertainties
         after its transmission throught the instrument and the atmosphere.
 
@@ -117,52 +106,84 @@ class SpectrumSimulation(Spectrum):
             Gaussian kernel size for the convolution (default: 0).
         D: float
             Distance between the CCD and the disperser in mm (default: parameters.DISTANCE2CCD)
-        shift: float
+        shift_x: float
             Shift in pixels of the order 0 position estimate (default: 0).
+        B: float
+            Amplitude level for the background (default: 0).
 
         Returns
         -------
         lambdas: array_like
             The wavelength array in nm used for the interpolation.
-        spectrum: callable
+        spectrum: array_like
             The spectrum interpolated function in Target units.
         spectrum_err: array_like
             The spectrum uncertainties interpolated function in Target units.
 
         """
-        pixels = np.arange(0, parameters.CCD_IMSIZE) - self.x0[0] - shift
-        new_x0 = [self.x0[0] - shift, self.x0[1]]
+        # find lambdas including ADR effect
+        new_x0 = [self.x0[0] - shift_x, self.x0[1]]
         self.disperser.D = D
-        lambdas = self.disperser.grating_pixel_to_lambda(pixels, x0=new_x0, order=1)
-        self.simulate_without_atmosphere(lambdas)
-        atmospheric_transmission = self.atmosphere.simulate(ozone, pwv, aerosols)(lambdas)
-        # np.savetxt('atmospheric_trans_20170530_130.txt',np.array([lambdas,atmospheric_transmission(lambdas)]).T)
-        self.data *= A1 * atmospheric_transmission
-        self.err *= A1 * atmospheric_transmission
+        distance = self.chromatic_psf.get_distance_along_dispersion_axis(shift_x=shift_x)
+        lambdas = self.disperser.grating_pixel_to_lambda(distance, x0=new_x0, order=1)
+        lambdas_order2 = self.disperser.grating_pixel_to_lambda(distance, x0=new_x0, order=2)
+        lambda_ref = self.lambda_ref
+        adr_ra, adr_dec = adr_calib(lambdas, self.adr_params, parameters.OBS_LATITUDE, lambda_ref=lambda_ref)
+        adr_u, _ = flip_and_rotate_adr_to_image_xy_coordinates(adr_ra, adr_dec,
+                                                               dispersion_axis_angle=self.rotation_angle)
+        distance_order1 = distance - adr_u
+        adr_ra, adr_dec = adr_calib(lambdas_order2, self.adr_params, parameters.OBS_LATITUDE, lambda_ref=lambda_ref)
+        adr_u, _ = flip_and_rotate_adr_to_image_xy_coordinates(adr_ra, adr_dec,
+                                                               dispersion_axis_angle=self.rotation_angle)
+        distance_order2 = distance - adr_u
+        lambdas = self.disperser.grating_pixel_to_lambda(distance_order1, x0=new_x0, order=1)
+        lambdas_order2 = self.disperser.grating_pixel_to_lambda(distance_order2, x0=new_x0, order=2)
+        self.lambdas_order2 = lambdas_order2
+        atmospheric_transmission = self.atmosphere.simulate(ozone, pwv, aerosols)
+        if self.fast_sim:
+            self.data, self.err = self.simulate_without_atmosphere(lambdas)
+            self.data *= A1 * atmospheric_transmission(lambdas)
+            self.err *= A1 * atmospheric_transmission(lambdas)
+        else:
+            def integrand(lbda):
+                return self.target.sed(lbda) * self.telescope.transmission(lbda) \
+                       * self.disperser.transmission(lbda) * atmospheric_transmission(lbda)
+
+            self.data = np.zeros_like(lambdas)
+            self.err = np.zeros_like(lambdas)
+            for i in range(len(lambdas) - 1):
+                lbdas = np.arange(lambdas[i], lambdas[i + 1], self.lambdas_step)
+                self.data[i] = A1 * np.mean(integrand(lbdas))
+                # self.data[i] = A1 * quad(integrand, lambdas[i], lambdas[i + 1])[0]
+            self.data[-1] = self.data[-2]
+            # self.data /= np.gradient(lambdas)
+            telescope_transmission = self.telescope.transmission(lambdas)
+            idx = np.where(telescope_transmission > 0)[0]
+            self.err[idx] = self.data[idx] * self.telescope.transmission_err(lambdas)[idx] / telescope_transmission[idx]
         # Now add the systematics
-        if reso > 1:
+        if reso > 0.1:
             self.data = fftconvolve_gaussian(self.data, reso)
             self.err = np.sqrt(np.abs(fftconvolve_gaussian(self.err ** 2, reso)))
-        if A2 > 0.:
-            sim_conv = interp1d(lambdas, self.data, kind="linear", bounds_error=False, fill_value=(0, 0))
-            err_conv = interp1d(lambdas, self.err, kind="linear", bounds_error=False, fill_value=(0, 0))
-            self.model = lambda x: sim_conv(x) + A2 * sim_conv(x / 2)
-            self.model_err = lambda x: np.sqrt(np.abs((err_conv(x)) ** 2 + (0.5 * A2 * err_conv(x / 2)) ** 2))
-            self.data = self.model(lambdas)
-            self.err = self.model_err(lambdas)
-        # now we include effects related to the wrong extraction of the spectrum:
-        # wrong estimation of the order 0 position and wrong DISTANCE2CCD
-        pixels = np.arange(0, parameters.CCD_IMSIZE) - self.x0[0]
-        self.disperser.D = parameters.DISTANCE2CCD
-        self.lambdas = self.disperser.grating_pixel_to_lambda(pixels, self.x0, order=1)
-        self.model = interp1d(self.lambdas, self.data, kind="linear", bounds_error=False, fill_value=(0, 0))
-        self.model_err = interp1d(self.lambdas, self.err, kind="linear", bounds_error=False, fill_value=(0, 0))
-        return self.lambdas, self.model, self.model_err
+        if A2 > 0:
+            lambdas_binwidths_order2 = np.gradient(lambdas_order2)
+            sim_conv = interp1d(lambdas, self.data * lambdas, kind="linear", bounds_error=False, fill_value=(0, 0))
+            err_conv = interp1d(lambdas, self.err * lambdas, kind="linear", bounds_error=False, fill_value=(0, 0))
+            spectrum_order2 = self.disperser.ratio_order_2over1(lambdas_order2) * sim_conv(lambdas_order2) \
+                              * lambdas_binwidths_order2 / self.lambdas_binwidths
+            err_order2 = err_conv(lambdas_order2) * lambdas_binwidths_order2 / self.lambdas_binwidths
+            self.data = (sim_conv(lambdas) + A2 * spectrum_order2) / lambdas
+            self.err = (err_conv(lambdas) + A2 * err_order2) / lambdas
+        if B != 0:
+            self.data += B / (lambdas * np.gradient(lambdas))
+        if np.any(self.err > 0):
+            min_positive = np.min(self.err[self.err > 0])
+            self.err[np.isclose(self.err, 0., atol=0.01 * min_positive)] = min_positive
+        return self.lambdas, self.data, self.err
 
 
 class SpectrogramModel(Spectrum):
 
-    def __init__(self, spectrum, atmosphere, telescope, disperser, with_background=True, fast_sim=False):
+    def __init__(self, spectrum, atmosphere, telescope, disperser, with_background=True, fast_sim=True):
         """Class to simulate a spectrogram.
 
         Parameters
@@ -183,18 +204,33 @@ class SpectrogramModel(Spectrum):
         self.disperser = disperser
         self.telescope = telescope
         self.atmosphere = atmosphere
-        # self.pixels_x = np.arange(self.chromatic_psf.Nx).astype(int)
-        # self.pixels_y = np.arange(self.chromatic_psf.Ny).astype(int)
+        self.true_lambdas = None
         self.true_spectrum = None
         self.lambdas = None
-        self.data = None
         self.err = None
         self.model = lambda x, y: np.zeros((x.size, y.size))
+        self.psf = load_PSF(psf_type=parameters.PSF_TYPE)
+        self.profile_params = None
         self.psf_cube = None
-        self.fhcube = None
+        self.psf_cube_order2 = None
         self.fix_psf_cube = False
         self.fast_sim = fast_sim
         self.with_background = with_background
+        lbdas_sed = self.target.wavelengths[0]
+        sub = np.where((lbdas_sed > parameters.LAMBDA_MIN) & (lbdas_sed < parameters.LAMBDA_MAX))
+        self.lambdas_step = min(parameters.LAMBDA_STEP, np.min(lbdas_sed[sub]))
+        self.yy, self.xx = np.mgrid[:self.spectrogram_Ny, :self.spectrogram_Nx]
+        self.pixels = np.asarray([self.xx, self.yy])
+
+    def set_true_spectrum(self, lambdas, ozone, pwv, aerosols, shift_t=0.):
+        atmosphere = self.atmosphere.simulate(ozone, pwv, aerosols)
+        spectrum = self.target.sed(lambdas)
+        spectrum *= self.disperser.transmission(lambdas - shift_t)
+        spectrum *= self.telescope.transmission(lambdas - shift_t)
+        spectrum *= atmosphere(lambdas)
+        self.true_spectrum = spectrum
+        self.true_lambdas = lambdas
+        return spectrum
 
     def simulate_spectrum(self, lambdas, ozone, pwv, aerosols, shift_t=0.):
         """
@@ -223,122 +259,110 @@ class SpectrogramModel(Spectrum):
         """
         spectrum = np.zeros_like(lambdas)
         atmosphere = self.atmosphere.simulate(ozone, pwv, aerosols)
+        telescope_transmission = self.telescope.transmission(lambdas - shift_t)
         if self.fast_sim:
             spectrum = self.target.sed(lambdas)
             spectrum *= self.disperser.transmission(lambdas - shift_t)
-            telescope_transmission = self.telescope.transmission(lambdas - shift_t)
             spectrum *= telescope_transmission
             spectrum *= atmosphere(lambdas)
-            spectrum_err = np.zeros_like(spectrum)
-            idx = np.where(telescope_transmission > 0)[0]
             spectrum *= parameters.FLAM_TO_ADURATE * lambdas * np.gradient(lambdas)
-            spectrum_err[idx] = self.telescope.transmission_err(lambdas)[idx] / telescope_transmission[idx] * spectrum[
-                idx]
         else:
             def integrand(lbda):
                 return lbda * self.target.sed(lbda) * self.telescope.transmission(lbda - shift_t) \
                        * self.disperser.transmission(lbda - shift_t) * atmosphere(lbda)
 
             for i in range(len(lambdas) - 1):
-                spectrum[i] = parameters.FLAM_TO_ADURATE * quad(integrand, lambdas[i], lambdas[i + 1])[0]
-
-        self.data = spectrum
-        self.err = np.zeros_like(spectrum)
-
-        # fig = plt.figure()
-        # plt.plot(lambdas, spectrum/np.max(spectrum), label="spec")
-        # # plt.plot(lambdas, telescope_transmission/np.max(telescope_transmission), label="transmission")
-        # plt.plot(lambdas, self.disperser.transmission(lambdas-shift_t), label="disperser trans")
-        # plt.legend()
-        # plt.show()
-        return self.data, self.err
+                # spectrum[i] = parameters.FLAM_TO_ADURATE * quad(integrand, lambdas[i], lambdas[i + 1])[0]
+                lbdas = np.arange(lambdas[i], lambdas[i + 1], self.lambdas_step)
+                spectrum[i] = parameters.FLAM_TO_ADURATE * np.mean(integrand(lbdas)) * (lambdas[i + 1] - lambdas[i])
+            spectrum[-1] = spectrum[-2]
+        spectrum_err = np.zeros_like(spectrum)
+        idx = telescope_transmission > 0
+        spectrum_err[idx] = self.telescope.transmission_err(lambdas)[idx] / telescope_transmission[idx] * spectrum[idx]
+        return spectrum, spectrum_err
 
     def simulate_psf(self, psf_poly_params):
-        psf_poly_params_with_saturation = np.concatenate([psf_poly_params, [self.spectrogram_saturation]])
-        profile_params = self.chromatic_psf.from_poly_params_to_profile_params(psf_poly_params_with_saturation,
-                                                                               force_positive=True)
+        profile_params = self.chromatic_psf.from_poly_params_to_profile_params(psf_poly_params, apply_bounds=True)
         self.chromatic_psf.fill_table_with_profile_params(profile_params)
-        # self.chromatic_psf.from_profile_params_to_shape_params(profile_params)
-        # self.chromatic_psf.table['Dx'] = np.arange(self.spectrogram_Nx) - self.spec
-        self.chromatic_psf.table['Dy_mean'] = 0
-        self.chromatic_psf.table['Dy'] = np.copy(self.chromatic_psf.table['x_mean'])
-        # derotate
-        # self.my_logger.warning(f"\n\tbefore\n {self.chromatic_psf.table[['Dx_rot','Dx','Dy','Dy_mean']][:5]} {angle}")
-        self.chromatic_psf.rotate_table(-self.rotation_angle)
+        self.chromatic_psf.table['Dy_disp_axis'] = np.tan(self.rotation_angle * np.pi / 180) * self.chromatic_psf.table[
+            'Dx']
+        self.chromatic_psf.table['Dy'] = np.copy(self.chromatic_psf.table['y_c']) - self.spectrogram_y0
         self.chromatic_psf.profile_params = self.chromatic_psf.from_table_to_profile_params()
         if parameters.DEBUG:
             self.chromatic_psf.plot_summary()
-        # self.my_logger.warning(f"\n\tafter\n {self.chromatic_psf.table[['Dx_rot','Dx','Dy','Dy_mean']][:5]} {angle}")
         return self.chromatic_psf.profile_params
 
     def simulate_dispersion(self, D, shift_x, shift_y, r0):
-        new_x0 = [self.x0[0] - shift_x, self.x0[1] - shift_y]
-        distance = np.array(self.chromatic_psf.get_distance_along_dispersion_axis(shift_x=shift_x, shift_y=shift_y))
-        # must have odd size
-        if distance.size % 2 == 0:
-            distance = distance[:-1]
+        # Distance in x and y with respect to the true order 0 position at lambda_ref
+        Dx = np.arange(self.spectrogram_Nx) - r0.real - shift_x  # distance in (x,y) spectrogram frame for column x
+        Dy_disp_axis = np.tan(self.rotation_angle * np.pi / 180) * Dx  # disp axis height in spectrogram frame for x
+        distance = np.sqrt(Dx**2 + Dy_disp_axis**2)
+
+        # Wavelengths using the order 0 shifts (ADR has no impact as it shifts order 0 and order p equally)
+        new_x0 = [self.x0[0] + shift_x, self.x0[1] + shift_y]
         self.disperser.D = D
         lambdas = self.disperser.grating_pixel_to_lambda(distance, x0=new_x0, order=1)
         lambdas_order2 = self.disperser.grating_pixel_to_lambda(distance, x0=new_x0, order=2)
-        lambdas_order2 = lambdas_order2[lambdas_order2 > np.min(lambdas)]
-        distances_order2 = self.disperser.grating_lambda_to_pixel(lambdas_order2, x0=new_x0, order=2)
+
+        # ADR for order 1
+        adr_ra, adr_dec = adr_calib(lambdas, self.adr_params, parameters.OBS_LATITUDE, lambda_ref=self.lambda_ref)
+        adr_x, adr_y = flip_and_rotate_adr_to_image_xy_coordinates(adr_ra, adr_dec, dispersion_axis_angle=0)
+        adr_u, adr_v = flip_and_rotate_adr_to_image_xy_coordinates(adr_ra, adr_dec,
+                                                                   dispersion_axis_angle=self.rotation_angle)
+        # Compute lambdas at pixel column x
+        lambdas = self.disperser.grating_pixel_to_lambda(distance - adr_u, new_x0, order=1)
+        # Position (not distance) in pixel of wavelength lambda order 1 centroid in the (x,y) spectrogram frame
+        dispersion_law = r0 + (Dx + shift_x + adr_x) + 1j * (Dy_disp_axis + adr_y + shift_y)
+
+        # ADR for order 2
+        adr_ra, adr_dec = adr_calib(lambdas_order2, self.adr_params, parameters.OBS_LATITUDE, lambda_ref=self.lambda_ref)
+        adr_x, adr_y = flip_and_rotate_adr_to_image_xy_coordinates(adr_ra, adr_dec, dispersion_axis_angle=0)
+        adr_u, adr_v = flip_and_rotate_adr_to_image_xy_coordinates(adr_ra, adr_dec,
+                                                                   dispersion_axis_angle=self.rotation_angle)
+        # Compute lambdas at pixel column x
+        lambdas_order2 = self.disperser.grating_pixel_to_lambda(distance - adr_u, new_x0, order=2)
+        # Position (not distance) in pixel of wavelength lambda order 2 centroid in the (x,y) spectrogram frame
+        dispersion_law_order2 = r0 + (Dx + shift_x + adr_x) + 1j * (Dy_disp_axis + adr_y + shift_y)
+
         # Dx_func = interp1d(lambdas / 2, self.chromatic_psf.table['Dx'], bounds_error=False, fill_value=(0, 0))
-        # Dy_mean_func = interp1d(lambdas / 2, self.chromatic_psf.table['Dy_mean'],bounds_error=False, fill_value=(0,0))
-        # dy_func = interp1d(lambdas / 2, self.chromatic_psf.table['Dy'] - self.chromatic_psf.table['Dy_mean'],
+        # Dy_mean_func=interp1d(lambdas/2,self.chromatic_psf.table['Dy_disp_axis'],bounds_error=False,fill_value=(0,0))
+        # dy_func = interp1d(lambdas / 2, self.chromatic_psf.table['Dy'] - self.chromatic_psf.table['Dy_disp_axis'],
         #                    bounds_error=False, fill_value=(0, 0))
         # dispersion_law = r0 + (self.chromatic_psf.table['Dx'] - shift_x) + 1j * (
         #             self.chromatic_psf.table['Dy'] - shift_y)
         # dispersion_law_order2 = r0 + (Dx_func(lambdas_order2) - shift_x) + 1j * (
         #             Dy_mean_func(lambdas_order2) + dy_func(lambdas_order2) - shift_y)
         # Dx_func = interp1d(lambdas, self.chromatic_psf.table['Dx'], bounds_error=False, fill_value=(0, 0))
-        # Dy_mean_func = interp1d(lambdas, self.chromatic_psf.table['Dy_mean'], bounds_error=False, fill_value=(0, 0))
-        dy_func = interp1d(lambdas,
-                           self.chromatic_psf.table['Dy'][:distance.size] - self.chromatic_psf.table['Dy_mean'][
-                                                                            :distance.size],
-                           bounds_error=False, fill_value=(0, 0))
-        dispersion_law = r0 + (self.chromatic_psf.table['Dx'][:distance.size] - shift_x) + 1j * (
-                self.chromatic_psf.table['Dy'][:distance.size] - shift_y)
-        dispersion_law_order2 = r0 + (distances_order2 * np.cos(np.pi * self.rotation_angle / 180) - shift_x) + 1j * (
-                distances_order2 * np.sin(np.pi * self.rotation_angle / 180) + dy_func(lambdas_order2) - shift_y)
-        dispersion_law_order2 = dispersion_law_order2[::2]
-        lambdas_order2 = lambdas_order2[::2]
+        # Dy_mean_func=interp1d(lambdas,self.chromatic_psf.table['Dy_dips_axis'],bounds_error=False, fill_value=(0, 0))
+
+        # dispersion laws from the PSF table
+        # dy_func = interp1d(lambdas, self.chromatic_psf.table['Dy'] - self.chromatic_psf.table['Dy_disp_axis'],
+        #                    bounds_error=False, fill_value="extrapolate")
+        # dispersion_law = r0 + (self.chromatic_psf.table['Dx'] - shift_x) \
+        #                  + 1j * (self.chromatic_psf.table['Dy'] - shift_y)
+        # dispersion_law_order2 = dispersion_law + 1j * (dy_func(lambdas_order2) - self.chromatic_psf.table['Dy']
+        #                                                + self.chromatic_psf.table['Dy_disp_axis'])
+
         self.lambdas = lambdas
         self.lambdas_binwidths = np.gradient(lambdas)
         if parameters.DEBUG:
             from spectractor.tools import from_lambda_to_colormap
-            plt.plot(self.chromatic_psf.table['Dx'], self.chromatic_psf.table['Dy_mean'], 'k-', label="mean")
+            plt.plot(self.chromatic_psf.table['Dx'], self.chromatic_psf.table['Dy_disp_axis'], 'k-', label="mean")
             plt.scatter(-r0.real + dispersion_law.real, -r0.imag + dispersion_law.imag, label="dispersion_law",
                         cmap=from_lambda_to_colormap(lambdas), c=lambdas)
             plt.scatter(-r0.real + dispersion_law_order2.real, -r0.imag + dispersion_law_order2.imag,
                         label="dispersion_law_order2", cmap=from_lambda_to_colormap(lambdas_order2), c=lambdas_order2)
-            plt.title(f"{new_x0}")
+            plt.title(f"x0={new_x0}")
             plt.legend()
             plt.show()
         if parameters.PdfPages:
             parameters.PdfPages.savefig()
 
-        return lambdas, dispersion_law, dispersion_law_order2
-
-    def build_spectrogram(self, profile_params, spectrum, dispersion_law):
-        # Spectrum units must in ADU/s
-        yy, xx = np.mgrid[:self.spectrogram_Ny, :self.spectrogram_Nx]
-        simul = np.zeros((self.spectrogram_Ny, self.spectrogram_Nx))
-        nlbda = dispersion_law.size
-        # TODO: increase rapidity (multithreading, optimisation...)
-        for i in range(0, nlbda, 1):
-            psf_lambda = PSF2D.evaluate(xx, yy, 1, dispersion_law[i].real, dispersion_law[i].imag,
-                                        *profile_params[i, 2:])
-            norm = PSF2D.normalisation(1, *profile_params[i, 2:-1])
-            if norm > 0:
-                psf_lambda /= norm
-            # here spectrum is in ADU/s
-            psf_lambda *= spectrum[i]
-            simul += psf_lambda
-        return simul
+        return lambdas, lambdas_order2, dispersion_law, dispersion_law_order2
 
     # @profile
     def simulate(self, A1=1.0, A2=0., ozone=300, pwv=5, aerosols=0.05, D=parameters.DISTANCE2CCD,
-                 shift_x=0., shift_y=0., angle=0., psf_poly_params=None):
+                 shift_x=0., shift_y=0., angle=0., B=1., psf_poly_params=None):
         """
 
         Parameters
@@ -353,13 +377,13 @@ class SpectrogramModel(Spectrum):
         shift_x
         shift_y
         angle
+        B
 
         Returns
         -------
 
         Example
         -------
-        >>> from spectractor.extractor.psf import  ChromaticPSF1D
         >>> from spectractor import parameters
         >>> parameters.DEBUG = True
         >>> spectrum, telescope, disperser, target = SimulatorInit('outputs/reduc_20170530_134_spectrum.fits')
@@ -374,224 +398,97 @@ class SpectrogramModel(Spectrum):
         import time
         start = time.time()
         self.rotation_angle = angle
-        profile_params = self.simulate_psf(psf_poly_params)
-        self.my_logger.debug(f'\n\tAfter psf: {time.time() - start}')
+        if self.profile_params is None or not self.fix_psf_cube:
+            self.profile_params = self.simulate_psf(psf_poly_params)
+        self.my_logger.debug(f'\n\tAfter psf params: {time.time() - start}')
         start = time.time()
         r0 = self.spectrogram_x0 + 1j * self.spectrogram_y0
-        lambdas, dispersion_law, dispersion_law_order2 = self.simulate_dispersion(D, shift_x, shift_y, r0)
+        lambdas, lambdas_order2, dispersion_law, dispersion_law_order2 = self.simulate_dispersion(D, shift_x, shift_y,
+                                                                                                  r0)
         self.my_logger.debug(f'\n\tAfter dispersion: {time.time() - start}')
         start = time.time()
         spectrum, spectrum_err = self.simulate_spectrum(lambdas, ozone, pwv, aerosols)
-        self.true_spectrum = spectrum
         self.my_logger.debug(f'\n\tAfter spectrum: {time.time() - start}')
+        # Fill the order 1 cube
+        nlbda = dispersion_law.size
+        if self.psf_cube is None or not self.fix_psf_cube:
+            start = time.time()
+            self.psf_cube = np.zeros((nlbda, self.spectrogram_Ny, self.spectrogram_Nx))
+            for i in range(0, nlbda, 1):
+                p = np.array([1, dispersion_law[i].real, dispersion_law[i].imag] + list(self.profile_params[i, 3:]))
+                self.psf_cube[i] = self.psf.evaluate(self.pixels, p=p)
+            self.my_logger.debug(f'\n\tAfter psf cube: {time.time() - start}')
         start = time.time()
-        ima1 = self.build_spectrogram(profile_params, spectrum, dispersion_law)
+        ima1 = np.zeros((self.spectrogram_Ny, self.spectrogram_Nx))
+        ima1_err2 = np.zeros((self.spectrogram_Ny, self.spectrogram_Nx))
+        for i in range(0, nlbda, 1):
+            # here spectrum[i] is in ADU/s
+            ima1 += spectrum[i] * self.psf_cube[i]
+            ima1_err2 += (spectrum_err[i] * self.psf_cube[i]) ** 2
         self.my_logger.debug(f'\n\tAfter build ima1: {time.time() - start}')
-        start = time.time()
 
         # Add order 2
-        ima2 = np.zeros_like(ima1)
         if A2 > 0.:
-            nlbda_order2 = dispersion_law_order2.size
-            ima2 = self.build_spectrogram(profile_params[-nlbda_order2:], spectrum[:nlbda_order2],
-                                          dispersion_law_order2)
-
-        self.my_logger.debug(f'\n\tAfter build ima2: {time.time() - start}')
+            spectrum_order2, spectrum_order2_err = self.disperser.ratio_order_2over1(lambdas_order2) * \
+                                                   self.simulate_spectrum(lambdas_order2, ozone, pwv, aerosols)
+            if np.any(np.isnan(spectrum_order2)):
+                spectrum_order2[np.isnan(spectrum_order2)] = 0.
+            nlbda = dispersion_law_order2.size
+            if self.psf_cube_order2 is None or not self.fix_psf_cube:
+                start = time.time()
+                self.psf_cube_order2 = np.zeros((nlbda, self.spectrogram_Ny, self.spectrogram_Nx))
+                # For each A(lambda)=A_x, affect an order 2 PSF with correct position and
+                # same PSF as for the order 1 but at the same position
+                profile_params_order2 = np.copy(self.profile_params)
+                profile_params_order2[:, 0] = 1
+                profile_params_order2[:, 1] = dispersion_law_order2.real
+                profile_params_order2[:, 2] = dispersion_law_order2.imag
+                distance = np.abs(dispersion_law)
+                distance_order2 = np.abs(dispersion_law_order2)
+                for k in range(3, self.profile_params.shape[1]):
+                    profile_params_order2[:, k] = interp1d(distance, profile_params_order2[:, k],
+                                                           kind="linear", fill_value="extrapolate")(distance_order2)
+                for i in range(0, nlbda, 1):
+                    self.psf_cube_order2[i] = self.psf.evaluate(self.pixels, p=profile_params_order2[i, :])
+                self.my_logger.debug(f'\n\tAfter psf cube order 2: {time.time() - start}')
+            start = time.time()
+            ima2 = np.zeros_like(ima1)
+            ima2_err2 = np.zeros_like(ima1)
+            for i in range(0, nlbda, 1):
+                # here spectrum[i] is in ADU/s
+                ima2 += spectrum_order2[i] * self.psf_cube_order2[i]
+                ima2_err2 += (spectrum_order2_err[i] * self.psf_cube_order2[i]) ** 2
+            # self.data is in ADU/s units here
+            self.data = A1 * (ima1 + A2 * ima2)
+            self.err = np.sqrt(A1*A1*(ima1_err2 + A2*A2*ima2_err2))
+            self.my_logger.debug(f'\n\tAfter build ima2: {time.time() - start}')
+        else:
+            self.data = A1 * ima1
+            self.err = A1 * np.sqrt(ima1_err2)
         start = time.time()
-        # self.data is in ADU/s units here
-        self.data = A1 * (ima1 + A2 * ima2)
         if self.with_background:
-            self.data += self.spectrogram_bgd
-        self.err = np.zeros_like(self.data)
-        self.my_logger.debug(f'\n\tAfter all: {time.time() - start}')
-        start = time.time()
+            self.data += B * self.spectrogram_bgd
+        self.my_logger.debug(f'\n\tAfter bgd: {time.time() - start}')
         if parameters.DEBUG:
-            fig, ax = plt.subplots(3, 1, sharex="all", figsize=(12, 9))
-            ax[0].imshow(self.data, origin='lower')
+            fig, ax = plt.subplots(2, 1, sharex="all", figsize=(12, 9))
+            im = ax[0].imshow(self.data, origin='lower')
+            plt.colorbar(im, ax=ax[0], label=self.units)
             ax[0].set_title('Model')
-            ax[1].imshow(self.spectrogram, origin='lower')
-            ax[1].set_title('Data')
+            im = ax[1].imshow(self.err, origin='lower')
+            plt.colorbar(im, ax=ax[1], label=self.units)
+            ax[1].set_title('Err')
             ax[1].set_xlabel('X [pixels]')
             ax[0].set_ylabel('Y [pixels]')
             ax[1].set_ylabel('Y [pixels]')
             ax[0].grid()
             ax[1].grid()
-            if self.with_background:
-                ax[2].plot(np.sum(self.data, axis=0), label="model")
-            else:
-                ax[2].plot(np.sum(self.data + self.spectrogram_bgd, axis=0), label="model")
-            ax[2].plot(np.sum(self.spectrogram, axis=0), label="data")
-            ax[2].grid()
-            ax[2].legend()
-            fig.tight_layout()
-            plt.show()
-        if parameters.PdfPages:
-            parameters.PdfPages.savefig()
-
-        return self.lambdas, self.data, self.err
-
-    def simulate_FFT(self, A1=1.0, A2=0., ozone=300, pwv=5, aerosols=0.05, D=parameters.DISTANCE2CCD,
-                     shift_x=0., shift_y=0., angle=0., psf_poly_params=None):
-        """
-        DEPRECATED
-
-        Parameters
-        ----------
-        A1
-        A2
-        ozone
-        pwv
-        aerosols
-        psf_poly_params
-        D
-        shift_x
-        shift_y
-
-        Returns
-        -------
-
-        Example
-        -------
-        # >>> from spectractor.extractor.psf import  ChromaticPSF1D
-        # >>> spectrum, telescope, disperser, target = SimulatorInit('outputs/reduc_20170530_134_spectrum.fits')
-        # >>> airmass = spectrum.header['AIRMASS']
-        # >>> pressure = spectrum.header['OUTPRESS']
-        # >>> temperature = spectrum.header['OUTTEMP']
-        # >>> atmosphere = Atmosphere(airmass, pressure, temperature)
-        # >>> psf_poly_params = spectrum.chromatic_psf.from_table_to_poly_params()
-        # >>> spec = SpectrogramModel(spectrum, atmosphere, telescope, disperser)
-        # >>> lambdas, data, err = spec.simulate_FFT(psf_poly_params=psf_poly_params)
-        """
-        import slitless.fourier.arrays as FA
-        import slitless.fourier.fourier as F
-        import time
-        start = time.time()
-        self.rotation_angle = angle
-        self.simulate_psf(psf_poly_params)
-        self.my_logger.debug(f'\n\tTime after simulate PSF: {time.time() - start}')
-        start = time.time()
-        # print(self.spectrogram_x0, self.spectrogram_Nx, self.spectrogram_y0, self.spectrogram_Ny, self.spectrogram_xmin,self.spectrogram_ymin)
-        # If nofftshift,use this r0:
-        r0 = (self.spectrogram_x0 - self.spectrogram_Nx / 2) + 1j * (self.spectrogram_y0 - self.spectrogram_Ny / 2)
-        # Else, this one:
-        # r0 = (self.spectrogram_x0 ) + 1j * (self.spectrogram_y0 )
-        lambdas, dispersion_law, dispersion_law_order2 = self.simulate_dispersion(D, shift_x, shift_y, r0)
-        self.my_logger.debug(f'\n\tTime after simulate disp: {time.time() - start}')
-        start = time.time()
-        spectrum, spectrum_err = self.simulate_spectrum(lambdas, ozone, pwv, aerosols)
-        self.true_spectrum = spectrum
-        self.my_logger.debug(f'\n\tTime after simulate spec: {time.time() - start}')
-        start = time.time()
-        nlbda = lambdas.size
-
-        # oversampling of the PSF to avoid Gibbs ringings
-        # rescale_factor must be odd
-        rescale_factor = 3
-        if self.fast_sim:
-            rescale_factor = 1
-        nima = rescale_factor * self.spectrogram_Ny
-        y, x = FA.create_coords((nima, nima), starts='auto', steps=1 / rescale_factor)  # (ny, nx)
-
-        # PSF cube
-        if self.psf_cube is None or not self.fix_psf_cube:
-            cube = pyfftw.zeros_aligned((nlbda, nima, nima), dtype='float32')
-            shape_params = np.array([self.chromatic_psf.table[name] for name in PSF2D.param_names[3:]]).T
-            for l in range(nlbda):
-                ima = PSF2D.evaluate(x, y, 1, 0, 0, *shape_params[l])
-                norm = PSF2D.normalisation(1, *shape_params[l])
-                if norm != 0.:
-                    ima /= norm  # Flux normalization: the flux should go in the spectrum
-                cube[l] = np.copy(ima)
-            self.psf_cube = cube
-        else:
-            cube = self.psf_cube
-
-        # Extended image (nima × nlbda) has to be perfecty centered
-        ny, nx = (nima, rescale_factor * self.spectrogram_Nx)  # Rectangular minimal embedding
-        hcube = FA.embed_array(cube, (nlbda, ny, nx))
-        self.my_logger.debug(f'\n\tTime after filling the cube: {time.time() - start}')
-        start = time.time()
-
-        # Generate slitless-spectroscopy image from Fourier analysis
-        if self.fhcube is None or not self.fix_psf_cube:
-            uh, vh, fhcube = F.fft_cube(hcube)  # same shape as hima
-            uh *= rescale_factor
-            vh *= rescale_factor
-            self.uh = uh
-            self.vh = vh
-            self.fhcube = fhcube
-            # print(uh.shape, vh.shape, np.min(self.uh), np.max(self.uh), fhcube.shape, dispersion_law.reshape(-1, 1, 1).shape)
-        else:
-            uh = self.uh
-            vh = self.vh
-            fhcube = self.fhcube
-        self.my_logger.debug(f'\n\tTime after fourier cube: {time.time() - start}')
-        # r0 = (self.spectrogram_x0 - self.spectrogram_Nx / 2 - shift_x) \
-        #      + 1j * (self.spectrogram_y0 - self.spectrogram_Ny / 2 - shift_y)
-        fdima0 = F.disperse_fcube(uh, vh, fhcube, spectrum, dispersion_law, method="numexpr")  # FT
-        self.my_logger.debug(f'\n\tTime after simulate after fourier: {time.time() - start}')
-        start = time.time()
-
-        # Dispersed image (noiseless)
-        dima0 = F.ifft_image(fdima0)
-        self.my_logger.debug(f'\n\tTime after simulate inverse fourier: {time.time() - start}')
-        start = time.time()
-
-        # Now add the systematics
-        # if reso > 1:
-        #     self.data = fftconvolve_gaussian(self.data, reso)
-        #     self.err = np.sqrt(np.abs(fftconvolve_gaussian(self.err ** 2, reso)))
-        dima0_2 = np.zeros_like(dima0)
-        if A2 > 0.:
-            nlbda_order2 = dispersion_law_order2.size
-            fdima0_2 = F.disperse_fcube(uh, vh, fhcube[-nlbda_order2:], spectrum[:nlbda_order2], dispersion_law_order2,
-                                        method="numexpr")  # FT
-            self.my_logger.debug(f'\n\tTime after simulate after fourier order 2: {time.time() - start}')
-            start = time.time()
-            dima0_2 = F.ifft_image(fdima0_2)
-            self.my_logger.debug(f'\n\tTime after simulate inverse fourier order 2: {time.time() - start}')
-            start = time.time()
-
-            # sim_conv = interp1d(lambdas, self.data, kind="linear", bounds_error=False, fill_value=(0, 0))
-            # err_conv = interp1d(lambdas, self.err, kind="linear", bounds_error=False, fill_value=(0, 0))
-            # self.model = lambda x: sim_conv(x) + A2 * sim_conv(x / 2)
-            # self.model_err = lambda x: np.sqrt(np.abs((err_conv(x)) ** 2 + (0.5 * A2 * err_conv(x / 2)) ** 2))
-            # self.data = self.model(lambdas)
-            # self.err = self.model_err(lambdas)
-        # Going to observable spectrum: must convert units (ie multiply by dlambda)
-        self.data = A1 * (dima0 + A2 * dima0_2)
-        # print(self.data.shape)
-        # toto = np.copy(self.data)
-        if rescale_factor != 1:
-            self.data = rebin(self.data, (self.spectrogram_Ny, self.spectrogram_Nx))
-        # plt.plot(np.sum(self.data,axis=0))
-        # plt.plot(np.sum(A1*dima0,axis=0))
-        # plt.plot(np.sum(A1*A2*dima0_2,axis=0))
-        # plt.plot(spectrum)
-        # plt.show()
-        middle = self.data.shape[0] // 2
-        width = int(self.spectrogram_ymax - self.spectrogram_ymin) // 2
-        # self.data = self.data[middle-width:middle+width+1, :]
-        self.lambdas = lambdas
-        self.lambdas_binwidths = np.gradient(lambdas)
-        # self.convert_from_flam_to_ADUrate()
-        # print(self.data.shape, (self.spectrogram_Ny,self.spectrogram_Nx))
-        # fig, ax = plt.subplots(2,1)
-        # ax[0].imshow(self.data, origin="lower", aspect="auto")
-        # ax[1].imshow(toto, origin="lower", aspect="auto")
-        # plt.show()
-        if self.with_background:
-            self.data += self.spectrogram_bgd
-        self.err = np.zeros_like(self.data)
-        if parameters.DEBUG:
-            fig, ax = plt.subplots(2, 1, sharex="all", figsize=(12, 6))
-            ax[0].imshow(self.data, origin='lower')
-            ax[0].set_title('Model')
-            ax[1].imshow(self.spectrogram, origin='lower')
-            ax[1].set_title('Data')
-            ax[1].set_xlabel('X [pixels]')
-            ax[0].set_ylabel('Y [pixels]')
-            ax[1].set_ylabel('Y [pixels]')
+            # if self.with_background:
+            #     ax[2].plot(np.sum(self.data, axis=0), label="model")
+            # else:
+            #     ax[2].plot(np.sum(self.data + self.spectrogram_bgd, axis=0), label="model")
+            # ax[2].plot(np.sum(self.spectrogram, axis=0), label="data")
+            # ax[2].grid()
+            # ax[2].legend()
             fig.tight_layout()
             plt.show()
         if parameters.PdfPages:
@@ -600,7 +497,7 @@ class SpectrogramModel(Spectrum):
         return self.lambdas, self.data, self.err
 
 
-class SpectrumSimGrid():
+class SpectrumSimGrid:
     """ SpectrumSim class used to store information and methods
     relative to spectrum simulation.
     NEED TO ADAPT THIS CLASS TO THE FULL SIMULATION WITH SYSTEMATICS.
@@ -653,10 +550,12 @@ class SpectrumSimGrid():
         plt.xlabel(r"$\lambda$ [nm]")
         plt.ylabel("Flux [ADU/s]")
         plt.title("Spectra for Atmospheric variations")
-        if parameters.DISPLAY:
-            plt.show()
         if parameters.PdfPages:
             parameters.PdfPages.savefig()
+        if parameters.DISPLAY:
+            plt.show()
+        else:
+            plt.close('all')
 
     def plot_spectra_img(self):
         plt.figure()
@@ -667,9 +566,12 @@ class SpectrumSimGrid():
         cbar = plt.colorbar(img)
         cbar.set_label("Flux [ADU/s]")
         plt.grid(True)
-        if parameters.DISPLAY: plt.show()
         if parameters.PdfPages:
             parameters.PdfPages.savefig()
+        if parameters.DISPLAY:
+            plt.show()
+        else:
+            plt.close('all')
 
     def save_spectra(self, filename):
 
@@ -686,7 +588,7 @@ class SpectrumSimGrid():
                 self.my_logger.info(f'\n\tSPECTRA.save atm-file={self.filename}')
 
 
-def SimulatorInit(filename):
+def SimulatorInit(filename, fast_load=False):
     """ SimulatorInit
     Main function to evaluate several spectra
     A grid of spectra will be produced for a given target, airmass and pressure
@@ -694,18 +596,11 @@ def SimulatorInit(filename):
     my_logger = set_logger(__name__)
     my_logger.info('\n\tStart SIMULATOR initialisation')
     # Load data spectrum
-    try:
-        spectrum = Spectrum(filename)
-    except:
-        spectrum = Image(filename)
+    spectrum = Spectrum(filename, fast_load=fast_load)
 
     # TELESCOPE TRANSMISSION
     # ------------------------
     telescope = TelescopeTransmission(spectrum.filter)
-    if parameters.DEBUG:
-        infostring = '\n\t ========= Telescope transmission :  ==============='
-        my_logger.info(infostring)
-        telescope.plot_transmission()
 
     # DISPERSER TRANSMISSION
     # ------------------------
@@ -713,22 +608,13 @@ def SimulatorInit(filename):
         disperser = spectrum.disperser
     else:
         disperser = Hologram(spectrum.disperser)
-    if parameters.DEBUG:
-        infostring = '\n\t ========= Disperser transmission :  ==============='
-        my_logger.info(infostring)
-        disperser.plot_transmission()
 
     # STAR SPECTRUM
     # ------------------------
-    target = spectrum.target
     if not isinstance(spectrum.target, str):
         target = spectrum.target
     else:
         target = Target(spectrum.target)
-    if parameters.DEBUG:
-        infostring = '\n\t ========= SED : %s  ===============' % target.label
-        my_logger.info(infostring)
-        target.plot_spectra()
 
     return spectrum, telescope, disperser, target
 
@@ -750,7 +636,6 @@ def SpectrumSimulatorCore(spectrum, telescope, disperser, airmass=1.0, pressure=
     spectrum_simulation = SpectrumSimulation(spectrum, atmosphere, telescope, disperser)
     spectrum_simulation.simulate(A1, A2, ozone, pwv, aerosols, reso, D, shift)
     if parameters.DEBUG:
-        infostring = '\n\t ========= Spectra simulation :  ==============='
         spectrum_simulation.plot_spectrum()
     return spectrum_simulation
 
@@ -758,7 +643,7 @@ def SpectrumSimulatorCore(spectrum, telescope, disperser, airmass=1.0, pressure=
 def SpectrogramSimulatorCore(spectrum, telescope, disperser, airmass=1.0, pressure=800, temperature=10,
                              pwv=5, ozone=300, aerosols=0.05, A1=1.0, A2=0.,
                              D=parameters.DISTANCE2CCD, shift_x=0., shift_y=0., shift_t=0., angle=0.,
-                             psf_poly_params=None, with_background=True, fast_sim=False):
+                             B=1., psf_poly_params=None, with_background=True, fast_sim=False):
     """ SimulatorCore
     Main function to evaluate several spectra
     A grid of spectra will be produced for a given target, airmass and pressure
@@ -775,7 +660,7 @@ def SpectrogramSimulatorCore(spectrum, telescope, disperser, airmass=1.0, pressu
     # --------------------
     spectrogram_simulation = SpectrogramModel(spectrum, atmosphere, telescope, disperser,
                                               with_background=with_background, fast_sim=fast_sim)
-    spectrogram_simulation.simulate(A1, A2, ozone, pwv, aerosols, D, shift_x, shift_y, angle, psf_poly_params)
+    spectrogram_simulation.simulate(A1, A2, ozone, pwv, aerosols, D, shift_x, shift_y, angle, B, psf_poly_params)
     return spectrogram_simulation
 
 
@@ -827,7 +712,7 @@ def SpectrumSimulatorSimGrid(filename, outputdir, pwv_grid=[0, 10, 5], ozone_gri
     # -------------
     # in any case we re-calculate the spectra in case of change of spectrum function
     spectra = SpectrumSimGrid(spectrum, atm, telescope, disperser, target, atm.header)
-    spectragrid = spectra.compute()
+    spectra.compute()
     spectra.save_spectra(output_filename)
     if parameters.DEBUG:
         spectra.plot_spectra()
@@ -857,14 +742,14 @@ def SpectrumSimulator(filename, outputdir="", pwv=5, ozone=300, aerosols=0.05, A
                                                 shift=shift)
 
     # Save the spectrum
-    spectrum_simulation.header['OZONE'] = ozone
-    spectrum_simulation.header['PWV'] = pwv
-    spectrum_simulation.header['VAOD'] = aerosols
-    spectrum_simulation.header['A1'] = A1
-    spectrum_simulation.header['A2'] = A2
-    spectrum_simulation.header['RESO'] = reso
-    spectrum_simulation.header['D2CCD'] = D
-    spectrum_simulation.header['X0SHIFT'] = shift
+    spectrum_simulation.header['OZONE_T'] = ozone
+    spectrum_simulation.header['PWV_T'] = pwv
+    spectrum_simulation.header['VAOD_T'] = aerosols
+    spectrum_simulation.header['A1_T'] = A1
+    spectrum_simulation.header['A2_T'] = A2
+    spectrum_simulation.header['RESO_T'] = reso
+    spectrum_simulation.header['D2CCD_T'] = D
+    spectrum_simulation.header['X0_T'] = shift
     output_filename = filename.replace('spectrum', 'sim')
     if outputdir != "":
         base_filename = filename.split('/')[-1]
@@ -875,7 +760,8 @@ def SpectrumSimulator(filename, outputdir="", pwv=5, ozone=300, aerosols=0.05, A
 
 
 def SpectrogramSimulator(filename, outputdir="", pwv=5, ozone=300, aerosols=0.05, A1=1., A2=0.,
-                         D=parameters.DISTANCE2CCD, shift_x=0., shift_y=0., shift_t=0., angle=0., psf_poly_params=None):
+                         D=parameters.DISTANCE2CCD, shift_x=0., shift_y=0., shift_t=0., angle=0., B=1.,
+                         psf_poly_params=None):
     """ Simulator
     Main function to evaluate several spectra
     A grid of spectra will be produced for a given target, airmass and pressure
@@ -898,19 +784,19 @@ def SpectrogramSimulator(filename, outputdir="", pwv=5, ozone=300, aerosols=0.05
     spectrogram_simulation = SpectrogramSimulatorCore(spectrum, telescope, disperser, airmass, pressure,
                                                       temperature, pwv, ozone, aerosols,
                                                       D=D, shift_x=shift_x,
-                                                      shift_y=shift_y, shift_t=shift_t, angle=angle,
+                                                      shift_y=shift_y, shift_t=shift_t, angle=angle, B=B,
                                                       psf_poly_params=psf_poly_params)
 
     # Save the spectrum
-    spectrogram_simulation.header['OZONE'] = ozone
-    spectrogram_simulation.header['PWV'] = pwv
-    spectrogram_simulation.header['VAOD'] = aerosols
-    spectrogram_simulation.header['A1'] = A1
-    spectrogram_simulation.header['A2'] = A2
-    spectrogram_simulation.header['D2CCD'] = D
-    spectrogram_simulation.header['X0SHIFT'] = shift_x
-    spectrogram_simulation.header['Y0SHIFT'] = shift_y
-    spectrogram_simulation.header['TSHIFT'] = shift_t
+    spectrogram_simulation.header['OZONE_T'] = ozone
+    spectrogram_simulation.header['PWV_T'] = pwv
+    spectrogram_simulation.header['VAOD_T'] = aerosols
+    spectrogram_simulation.header['A1_T'] = A1
+    spectrogram_simulation.header['A2_T'] = A2
+    spectrogram_simulation.header['D2CCD_T'] = D
+    spectrogram_simulation.header['X0_T'] = shift_x
+    spectrogram_simulation.header['Y0_T'] = shift_y
+    spectrogram_simulation.header['TSHIFT_T'] = shift_t
     spectrogram_simulation.header['ROTANGLE'] = angle
     output_filename = filename.replace('spectrum', 'sim')
     if outputdir != "":

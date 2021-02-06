@@ -12,10 +12,12 @@ import numpy as np
 from spectractor import parameters
 from spectractor.config import set_logger
 from spectractor.extractor.spectroscopy import (Lines, HGAR_LINES, HYDROGEN_LINES, ATMOSPHERIC_LINES,
-                                                ISM_LINES)
+                                                ISM_LINES, STELLAR_LINES)
 
 if os.getenv("PYSYN_CDBS"):
     import pysynphot as S
+
+Simbad.add_votable_fields('flux(U)', 'flux(B)', 'flux(V)', 'flux(R)', 'flux(I)', 'flux(J)', 'sptype')
 
 
 def load_target(label, verbose=False):
@@ -57,8 +59,7 @@ def load_target(label, verbose=False):
     elif parameters.OBS_OBJECT_TYPE == 'MONOCHROMATOR':
         return Monochromator(label, verbose)
     else:
-        t = Target(label, verbose)
-        t.my_logger.error(f'\n\tUnknown parameters.OBS_OBJECT_TYPE: {parameters.OBS_OBJECT_TYPE}')
+        raise ValueError(f'Unknown parameters.OBS_OBJECT_TYPE: {parameters.OBS_OBJECT_TYPE}')
 
 
 class Target:
@@ -105,6 +106,7 @@ class ArcLamp(Target):
         --------
 
         Mercury-Argon lamp:
+
         >>> t = ArcLamp("HG-AR", verbose=False)
         >>> print([line.wavelength for line in t.lines.lines][:5])
         [253.652, 296.728, 302.15, 313.155, 334.148]
@@ -115,7 +117,7 @@ class ArcLamp(Target):
         Target.__init__(self, label, verbose=verbose)
         self.my_logger = set_logger(self.__class__.__name__)
         self.emission_spectrum = True
-        self.lines = Lines(HGAR_LINES, emission_spectrum=True)
+        self.lines = Lines(HGAR_LINES, emission_spectrum=True, orders=[1, 2])
 
     def load(self):  # pragma: no cover
         pass
@@ -146,7 +148,7 @@ class Monochromator(Target):
         Target.__init__(self, label, verbose=verbose)
         self.my_logger = set_logger(self.__class__.__name__)
         self.emission_spectrum = True
-        self.lines = Lines([], emission_spectrum=True)
+        self.lines = Lines([], emission_spectrum=True, orders=[1, 2])
 
     def load(self):  # pragma: no cover
         pass
@@ -168,6 +170,7 @@ class Star(Target):
         --------
 
         Emission line object:
+
         >>> s = Star('3C273')
         >>> print(s.label)
         3C273
@@ -177,6 +180,7 @@ class Star(Target):
         True
 
         Standard star:
+
         >>> s = Star('HD111980')
         >>> print(s.label)
         HD111980
@@ -210,7 +214,7 @@ class Star(Target):
                 self.my_logger.info(f'\n\tSimbad:\n{simbad}')
             self.radec_position = SkyCoord(simbad['RA'][0] + ' ' + simbad['DEC'][0], unit=(u.hourangle, u.deg))
         else:
-            self.my_logger.warning('Target {} not found in Simbad'.format(self.label))
+           self.my_logger.warning('Target {} not found in Simbad'.format(self.label))
         self.get_radec_position_after_pm(date_obs="J2000")
         self.redshift = float(simbad['Z_VALUE'])
         self.load_spectra()
@@ -251,8 +255,8 @@ class Star(Target):
         if len(file_names) > 0:
             is_calspec = True
             self.emission_spectrum = False
-            self.hydrogen_only = True
-            self.lines = Lines(HYDROGEN_LINES+ATMOSPHERIC_LINES,
+            self.hydrogen_only = False
+            self.lines = Lines(HYDROGEN_LINES + ATMOSPHERIC_LINES + STELLAR_LINES,
                                redshift=self.redshift, emission_spectrum=self.emission_spectrum,
                                hydrogen_only=self.hydrogen_only)
             for k, f in enumerate(file_names):
@@ -269,8 +273,8 @@ class Star(Target):
                     self.spectra.append(data.flux)
         elif 'HD' in self.label or self.label in parameters.STAR_NAMES:  # it is a star
             self.emission_spectrum = False
-            self.hydrogen_only = True
-            self.lines = Lines(ATMOSPHERIC_LINES + HYDROGEN_LINES,
+            self.hydrogen_only = False
+            self.lines = Lines(ATMOSPHERIC_LINES + HYDROGEN_LINES + STELLAR_LINES,
                                redshift=self.redshift, emission_spectrum=self.emission_spectrum,
                                hydrogen_only=self.hydrogen_only)
         else:
@@ -389,7 +393,5 @@ class Star(Target):
 
 if __name__ == "__main__":
     import doctest
-    # if np.__version__ >= "1.14.0":
-    #    np.set_printoptions(legacy="1.13")
 
     doctest.testmod()

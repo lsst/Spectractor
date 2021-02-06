@@ -12,13 +12,24 @@ from spectractor import parameters
 logging.getLogger("matplotlib").setLevel(logging.ERROR)
 
 
-def load_config(config_filename):
-    if not os.path.isfile(config_filename):
-        sys.exit('Config file %s does not exist.' % config_filename)
-    # Load the configuration file
-    config = configparser.ConfigParser()
-    config.read(config_filename)
+def from_config_to_parameters(config):
+    """Convert config file keywords into spectractor.parameters parameters.
 
+    Parameters
+    ----------
+    config: ConfigParser
+        The ConfigParser instance to convert
+
+    Examples
+    --------
+
+    >>> config = configparser.ConfigParser()
+    >>> config.read(os.path.join(parameters.CONFIG_DIR,"default.ini"))  # doctest: +ELLIPSIS
+    ['/.../config/default.ini']
+    >>> from_config_to_parameters(config)
+    >>> assert parameters.OBS_NAME == "DEFAULT"
+
+    """
     # List all contents
     for section in config.sections():
         for options in config.options(section):
@@ -36,6 +47,45 @@ def load_config(config_filename):
                 value = str(value)
             setattr(parameters, options.upper(), value)
 
+
+def load_config(config_filename):
+    """Load configuration parameters from a .ini config file.
+
+    Parameters
+    ----------
+    config_filename: str
+        The path to the config file.
+
+    Examples
+    --------
+
+    >>> load_config("./config/ctio.ini")
+    >>> assert parameters.OBS_NAME == "CTIO"
+
+    .. doctest:
+        :hide:
+
+        >>> load_config("./config/unknown_file.ini")
+        Traceback (most recent call last):
+        ...
+        SystemExit: Config file ./config/unknown_file.ini does not exist.
+        >>> load_config("./config/ctio.ini")
+
+    """
+    if not os.path.isfile(os.path.join(parameters.CONFIG_DIR, "default.ini")):
+        raise FileNotFoundError('Config file default.ini does not exist.')
+    # Load the configuration file
+    config = configparser.ConfigParser()
+    config.read(os.path.join(parameters.CONFIG_DIR, "default.ini"))
+    from_config_to_parameters(config)
+
+    if not os.path.isfile(config_filename):
+        raise FileNotFoundError(f'Config file {config_filename} does not exist.')
+    # Load the configuration file
+    config = configparser.ConfigParser()
+    config.read(config_filename)
+    from_config_to_parameters(config)
+
     # Derive other parameters
     parameters.MY_FORMAT = "%(asctime)-20s %(name)-10s %(funcName)-20s %(levelname)-6s %(message)s"
     logging.basicConfig(format=parameters.MY_FORMAT, level=logging.WARNING)
@@ -47,17 +97,20 @@ def load_config(config_filename):
     parameters.OBS_SURFACE = np.pi * parameters.OBS_DIAMETER ** 2 / 4.  # Surface of telescope
     parameters.LAMBDAS = np.arange(parameters.LAMBDA_MIN, parameters.LAMBDA_MAX, 1)
     parameters.FLAM_TO_ADURATE = ((parameters.OBS_SURFACE * parameters.SED_UNIT * parameters.TIME_UNIT
-                                   * parameters.wl_dwl_unit / parameters.hc / parameters.CCD_GAIN
-                                   * parameters.g_disperser_ronchi).decompose()).value
+                                   * parameters.wl_dwl_unit / parameters.hc / parameters.CCD_GAIN).decompose()).value
     parameters.CALIB_BGD_NPARAMS = parameters.CALIB_BGD_ORDER + 1
+
+    # check consistency
+    if parameters.PIXWIDTH_BOXSIZE > parameters.PIXWIDTH_BACKGROUND:
+        sys.exit(f'parameters.PIXWIDTH_BOXSIZE must be smaller than parameters.PIXWIDTH_BACKGROUND (or equal).')
 
     if parameters.VERBOSE:
         for section in config.sections():
-            print("Section: %s" % section)
+            print(f"Section: {section}")
             for options in config.options(section):
                 value = config.get(section, options)
                 par = getattr(parameters, options.upper())
-                print(f"x {options}: {value}\t => parameters.{options.upper()}: {par}\t {type(par)}")
+                print(f"x {options}: {value}\t=> parameters.{options.upper()}: {par}\t {type(par)}")
 
 
 def set_logger(logger):
@@ -75,6 +128,7 @@ def set_logger(logger):
 
     Examples
     --------
+
     >>> class Test:
     ...     def __init__(self):
     ...         self.my_logger = set_logger(self.__class__.__name__)
@@ -87,10 +141,11 @@ def set_logger(logger):
     >>> parameters.DEBUG = True
     >>> test = Test()
     >>> test.log()
+    
     """
     my_logger = logging.getLogger(logger)
     coloredlogs.DEFAULT_LEVEL_STYLES['warn'] = {'color': 'yellow'}
-    coloredlogs.DEFAULT_FIELD_STYLES['levelname'] = {'color':  'white', 'bold': True}
+    coloredlogs.DEFAULT_FIELD_STYLES['levelname'] = {'color': 'white', 'bold': True}
     if parameters.VERBOSE > 0:
         my_logger.setLevel(logging.INFO)
         coloredlogs.install(fmt=parameters.MY_FORMAT, level=logging.INFO)
@@ -101,3 +156,10 @@ def set_logger(logger):
         my_logger.setLevel(logging.DEBUG)
         coloredlogs.install(fmt=parameters.MY_FORMAT, level=logging.DEBUG)
     return my_logger
+
+
+if __name__ == "__main__":
+    import doctest
+
+    doctest.testmod()
+

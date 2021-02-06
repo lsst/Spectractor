@@ -73,8 +73,12 @@ before_script:
   - "export LIBRADTRAN_DIR=libRadtran-2.0.2/"
   - export NETPBM_LIB="-L/usr/lib -lnetpbm"
   - export NETPBM_INC="-I/usr/include"
-  - wget http://astrometry.net/downloads/astrometry.net-latest.tar.gz
-  - tar xvzf astrometry.net-latest.tar.gz
+  - conda create -n py37 python=3.7 pip
+  - source activate py37
+  - python --version
+  - pip install pyutil numpy
+  - wget http://astrometry.net/downloads/astrometry.net-0.78.tar.gz
+  - tar xvzf astrometry.net-0.78.tar.gz
   - cd astrometry.net-*
   - make
   - make py
@@ -86,9 +90,7 @@ before_script:
   # - make install-indexes
   - cd ../
   - "export ASTROMETRYNET_DIR=$TRAVIS_BUILD_DIR/ASTROMETRYNET"
-  - conda create -n py37 python=3.7 pip
-  - source activate py37
-  - python --version
+  - "echo 'disable_jit: 1' > .numba_config.yaml"
 
 
   # - "git clone https://$CI_USER_TOKEN@github.com/jeremyneveu/slitless.git slitless"
@@ -96,15 +98,18 @@ before_script:
   # - git checkout spectractor
   # - "pip install ."
   # - "cd ../"
-
-script:
   - pip install numpy nose coloredlogs six
   - pip install -r requirements.txt
   # - python setup.py build
   # - python setup.py install
   - pip install .
-  - nosetests tests/run_tests.py --all --debug --detailed-errors --verbose --process-restartworker --with-coverage --cover-package=spectractor
-  - ./coverage_and_test.sh
+
+jobs:
+  include:
+  - stage: nosetests
+    script: nosetests tests/run_tests.py --all --debug --detailed-errors --verbose --process-restartworker --with-coverage --cover-package=spectractor
+  - stage: doctests and coverage
+    script: ./coverage_and_test.sh
 #- coverage run -a --source=spectractor spectractor/*.py
 #- coverage run -a --source=spectractor extractor simulator fit
 
