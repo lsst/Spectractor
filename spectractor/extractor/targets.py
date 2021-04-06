@@ -49,8 +49,6 @@ def load_target(label, verbose=False):
     >>> t = load_target("XX", verbose=False)
     >>> print([line.wavelength for line in t.lines.lines][:5])
     [253.652, 296.728, 302.15, 313.155, 334.148]
-    >>> parameters.OBS_OBJECT_TYPE = "OTHER"
-    >>> t = load_target("XX", verbose=False)
     """
     if parameters.OBS_OBJECT_TYPE == 'STAR':
         return Star(label, verbose)
@@ -88,6 +86,9 @@ class Target:
         self.radec_position = None
         self.radec_position_after_pm = None
         self.redshift = 0
+        self.image = None
+        self.image_x0 = None
+        self.image_y0 = None
 
 
 class ArcLamp(Target):

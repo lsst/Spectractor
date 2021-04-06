@@ -14,6 +14,7 @@ from spectractor.extractor.targets import load_target
 from spectractor.extractor.dispersers import Hologram
 from spectractor.extractor.psf import Moffat
 from spectractor.simulation.adr import hadec2zdpar
+from spectractor.simulation.throughput import TelescopeTransmission
 from spectractor.tools import (plot_image_simple, save_fits, load_fits, fit_poly1d, plot_compass_simple,
                                fit_poly1d_outlier_removal, weighted_avg_and_std,
                                fit_poly2d_outlier_removal, hessian_and_theta,
@@ -68,7 +69,7 @@ class Image(object):
         self.disperser_label = disperser_label
         self.target_label = target_label
         self.target_guess = None
-        self.filter = None
+        self.filter_label = ""
         self.filters = None
         self.header = None
         self.data = None
@@ -111,6 +112,10 @@ class Image(object):
         self.header['D2CCD'] = parameters.DISTANCE2CCD
         self.header.comments["D2CCD"] = "[mm] distance between disperser and CCD"
 
+        if self.filter_label != "" and "empty" not in self.filter_label.lower():
+            t = TelescopeTransmission(filter_label=self.filter_label)
+            t.reset_lambda_range(transmission_threshold=1e-4)
+
         if self.target_label != "":
             self.target = load_target(self.target_label, verbose=parameters.VERBOSE)
             self.header['REDSHIFT'] = str(self.target.redshift)
@@ -141,6 +146,7 @@ class Image(object):
         self.header['OUTTEMP'] = self.temperature
         self.header['OUTPRESS'] = self.pressure
         self.header['OUTHUM'] = self.humidity
+        self.header['CCDREBIN'] = parameters.CCD_REBIN
 
         self.disperser = Hologram(self.disperser_label, D=parameters.DISTANCE2CCD,
                                   data_dir=parameters.DISPERSER_DIR, verbose=parameters.VERBOSE)
@@ -221,7 +227,6 @@ class Image(object):
         .. doctest::
 
             >>> im = Image('tests/data/reduc_20170530_134.fits')
-            >>> im.compute_statistical_error()
             >>> im.convert_to_ADU_units()
             >>> im.compute_statistical_error()
             >>> im.plot_statistical_error()
@@ -416,7 +421,8 @@ class Image(object):
             units = self.units
         plot_image_simple(ax, data=data, scale=scale, title=title, units=units, cax=cax,
                           target_pixcoords=target_pixcoords, aspect=aspect, vmin=vmin, vmax=vmax, cmap=cmap)
-        plot_compass_simple(ax, self.parallactic_angle, arrow_size=0.1, origin=[0.15, 0.15])
+        if parameters.OBS_OBJECT_TYPE == "STAR":
+            plot_compass_simple(ax, self.parallactic_angle, arrow_size=0.1, origin=[0.15, 0.15])
         plt.legend()
         if parameters.LSST_SAVEFIGPATH:  # pragma: no cover
             plt.gcf().savefig(os.path.join(parameters.LSST_SAVEFIGPATH, 'image.pdf'))
@@ -440,7 +446,8 @@ def load_CTIO_image(image):
     image.airmass = float(image.header['AIRMASS'])
     image.expo = float(image.header['EXPTIME'])
     image.filters = image.header['FILTERS']
-    image.filter = image.header['FILTER1']
+    if "dia" not in image.header['FILTER1'].lower():
+        image.filter_label = image.header['FILTER1']
     image.disperser_label = image.header['FILTER2']
     image.ra = Angle(image.header['RA'], unit="hourangle")
     image.dec = Angle(image.header['DEC'], unit="deg")
@@ -566,13 +573,14 @@ def load_AUXTEL_image(image):  # pragma: no cover
         The Image instance to fill with file data and header.
     """
     image.my_logger.info(f'\n\tLoading AUXTEL image {image.file_name}...')
-    image.my_logger.warning(image.header)
     hdu_list = fits.open(image.file_name)
     image.header = hdu_list[0].header
     image.data = hdu_list[1].data.astype(np.float64)
     hdu_list.close()  # need to free allocation for file descripto
     image.date_obs = image.header['DATE']
     image.expo = float(image.header['EXPTIME'])
+    if "empty" not in image.header['FILTER'].lower():
+        image.filter_label = image.header['FILTER']
     # transformations so that stars are like in Stellarium up to a rotation
     # with spectrogram nearly horizontal and on the right of central star
     image.data = image.data.T[::-1, ::-1]
@@ -587,35 +595,41 @@ def load_AUXTEL_image(image):  # pragma: no cover
     image.disperser_label = image.header['GRATING']
     image.ra = Angle(image.header['RA'], unit="deg")
     image.dec = Angle(image.header['DEC'], unit="deg")
-    image.hour_angle = Angle(image.header['HA'], unit="deg")
-    image.temperature = 10  # image.header['OUTTEMP']
-    image.pressure = 730  # image.header['OUTPRESS']
-    image.humidity = 25  # image.header['OUTHUM']
+    image.hour_angle = Angle(image.header['HASTART'], unit="hourangle")
+    if 'AIRTEMP' in image.header:
+        image.temperature = image.header['AIRTEMP']
+    else:
+        image.temperature = 10
+    if 'PRESSURE' in image.header:
+        image.pressure = image.header['PRESSURE']
+    else:
+        image.pressure = 743
+    if 'HUMIDITY' in image.header:
+        image.humidity = image.header['HUMIDITY']
+    else:
+        image.humidity = 40
     if 'adu' in image.header['BUNIT']:
         image.units = 'ADU'
-    image.my_logger.warning("\n\tNeed to set the camera rotation angle ? Angle must be counted positive from "
-                            "north to east direction. Need to flip the signs ?")
     parameters.OBS_CAMERA_ROTATION = 90 - float(image.header["ROTPA"])
-    # parameters.OBS_CAMERA_ROTATION = -270 + 180/np.pi * np.arctan2(hdu_list[1].header["CD2_1"],
-    # hdu_list[1].header["CD1_1"])
     if parameters.OBS_CAMERA_ROTATION > 360:
         parameters.OBS_CAMERA_ROTATION -= 360
     if parameters.OBS_CAMERA_ROTATION < -360:
         parameters.OBS_CAMERA_ROTATION += 360
-    rotation_wcs = 180 / np.pi * np.arctan2(hdu_list[1].header["CD2_1"], hdu_list[1].header["CD1_1"])
-    if not np.isclose(rotation_wcs, -parameters.OBS_CAMERA_ROTATION % 360, atol=1):
-        image.my_logger.warning(f"\n\tWCS rotation angle is {rotation_wcs} degree while "
-                                f"parameters.OBS_CAMERA_ROTATION={parameters.OBS_CAMERA_ROTATION} degree. "
-                                f"\nBoth differs by more than 1 degree... bug ?")
+    if "CD2_1" in hdu_list[1].header:
+        rotation_wcs = 180 / np.pi * np.arctan2(hdu_list[1].header["CD2_1"], hdu_list[1].header["CD1_1"]) + 90
+        if not np.isclose(rotation_wcs % 360, parameters.OBS_CAMERA_ROTATION % 360, atol=2):
+            image.my_logger.warning(f"\n\tWCS rotation angle is {rotation_wcs} degree while "
+                                    f"parameters.OBS_CAMERA_ROTATION={parameters.OBS_CAMERA_ROTATION} degree. "
+                                    f"\nBoth differs by more than 2 degree... bug ?")
     parameters.OBS_ALTITUDE = float(image.header['OBS-ELEV']) / 1000
     parameters.OBS_LATITUDE = image.header['OBS-LAT']
     image.read_out_noise = 8.5 * np.ones_like(image.data)
     image.target_label = image.header["OBJECT"].replace(" ", "")
-    image.target_guess = [parameters.CCD_IMSIZE - float(image.header["OBJECTY"]),
-                          parameters.CCD_IMSIZE - float(image.header["OBJECTX"])]
+    if "OBJECTX" in image.header:
+        image.target_guess = [parameters.CCD_IMSIZE - float(image.header["OBJECTY"]),
+                              parameters.CCD_IMSIZE - float(image.header["OBJECTX"])]
     image.disperser_label = image.header["GRATING"]
-    image.disperser_label = image.header["GRATING"]
-    parameters.DISTANCE2CCD = 116 + float(image.header["LINSPOS"])  # mm
+    parameters.DISTANCE2CCD = 115 + float(image.header["LINSPOS"])  # mm
     image.compute_parallactic_angle()
 
 
@@ -674,12 +688,14 @@ def find_target(image, guess=None, rotated=False, use_wcs=True, widths=[paramete
                 target_pixcoords = np.array(wcs.all_world2pix(target_coord_after_motion.ra,
                                                               target_coord_after_motion.dec, 0))
                 theX, theY = target_pixcoords / parameters.CCD_REBIN
+            sub_image_subtracted, x0, y0, Dx, Dy, sub_errors = find_target_init(image=image, guess=[theX, theY],
+                                                                                rotated=rotated, widths=widths)
+            sub_image_x0 = theX - x0 + Dx
+            sub_image_y0 = theX - y0 + Dy
             if parameters.DEBUG:
                 plt.figure(figsize=(5, 5))
-                sub_image, x0, y0, Dx, Dy, sub_errors = find_target_init(image=image, guess=[theX, theY],
-                                                                         rotated=rotated, widths=(20, 20))
-                plot_image_simple(plt.gca(), data=sub_image, scale="lin", title="", units=image.units,
-                                  target_pixcoords=[theX - x0 + Dx, theY - y0 + Dy])
+                plot_image_simple(plt.gca(), data=sub_image_subtracted, scale="lin", title="", units=image.units,
+                                  target_pixcoords=[theX - x0 + Dx, theX - x0 + Dx])
                 plt.show()
             if parameters.PdfPages:
                 parameters.PdfPages.savefig()
@@ -698,34 +714,46 @@ def find_target(image, guess=None, rotated=False, use_wcs=True, widths=[paramete
         niter = 2
         sub_image_subtracted, x0, y0, Dx, Dy, sub_errors = find_target_init(image=image, guess=guess, rotated=rotated,
                                                                             widths=(Dx, Dy))
+        sub_image_x0, sub_image_y0 = x0, y0
         for i in range(niter):
             # find the target
             # try:
-            avX, avY = find_target_Moffat2D(image, sub_image_subtracted, sub_errors=sub_errors)
+            sub_image_x0, sub_image_y0 = find_target_Moffat2D(image, sub_image_subtracted, sub_errors=sub_errors)
             # except (Exception, ValueError):
             #     image.target_star2D = None
             #     avX, avY = find_target_2DprofileASTROPY(image, sub_image_subtracted, sub_errors=sub_errors)
             # compute target position
-            theX = x0 - Dx + avX
-            theY = y0 - Dy + avY
+            theX = x0 - Dx + sub_image_x0
+            theY = y0 - Dy + sub_image_y0
             # crop for next iteration
-            Dx = Dx // (i + 2)
-            Dy = Dy // (i + 2)
-            x0 = int(theX)
-            y0 = int(theY)
-            NY, NX = sub_image_subtracted.shape
-            sub_image_subtracted = sub_image_subtracted[max(0, int(avY) - Dy):min(NY, int(avY) + Dy),
-                                   max(0, int(avX) - Dx):min(NX, int(avX) + Dx)]
-            sub_errors = sub_errors[max(0, int(avY) - Dy):min(NY, int(avY) + Dy),
-                         max(0, int(avX) - Dx):min(NX, int(avX) + Dx)]
-            if int(avX) - Dx < 0:
-                Dx = int(avX)
-            if int(avY) - Dy < 0:
-                Dy = int(avY)
+            if i < niter - 1:
+                Dx = Dx // (i + 2)
+                Dy = Dy // (i + 2)
+                x0 = int(theX)
+                y0 = int(theY)
+                NY, NX = sub_image_subtracted.shape
+                sub_image_subtracted = sub_image_subtracted[
+                                       max(0, int(sub_image_y0) - Dy):min(NY, int(sub_image_y0) + Dy),
+                                       max(0, int(sub_image_x0) - Dx):min(NX, int(sub_image_x0) + Dx)]
+                sub_errors = sub_errors[max(0, int(sub_image_y0) - Dy):min(NY, int(sub_image_y0) + Dy),
+                             max(0, int(sub_image_x0) - Dx):min(NX, int(sub_image_x0) + Dx)]
+                if int(sub_image_x0) - Dx < 0:
+                    Dx = int(sub_image_x0)
+                if int(sub_image_y0) - Dy < 0:
+                    Dy = int(sub_image_y0)
+    else:
+        Dx, Dy = widths
+        sub_image_subtracted, x0, y0, Dx, Dy, sub_errors = find_target_init(image=image, guess=target_pixcoords,
+                                                                            rotated=rotated, widths=(Dx, Dy))
+        sub_image_x0 = target_pixcoords[0] - x0 + Dx
+        sub_image_y0 = target_pixcoords[1] - y0 + Dy
     image.my_logger.info(f'\n\tX,Y target position in pixels: {theX:.3f},{theY:.3f}')
     if rotated:
         image.target_pixcoords_rotated = [theX, theY]
     else:
+        image.target.image = sub_image_subtracted
+        image.target.image_x0 = sub_image_x0
+        image.target.image_y0 = sub_image_y0
         image.target_pixcoords = [theX, theY]
         image.header['TARGETX'] = theX
         image.header.comments['TARGETX'] = 'target position on X axis'
@@ -1022,18 +1050,16 @@ def compute_rotation_angle_hessian(image, angle_range=(-10, 10), width_cut=param
     >>> slope = -0.1
     >>> y = lambda x: slope * (x - 0.5*N) + 0.5*N
     >>> for x in np.arange(N):
-    ...     im.data[int(y(x)), x] = 10
-    ...     im.data[int(y(x))+1, x] = 10
+    ...     im.data[int(y(x)), x] = 100
+    ...     im.data[int(y(x))+1, x] = 100
     >>> im.target_pixcoords=(N//2, N//2)
     >>> parameters.DEBUG = True
     >>> theta = compute_rotation_angle_hessian(im)
-    >>> print(f'{theta:.2f}, {np.arctan(slope)*180/np.pi:.2f}')
-    -5.72, -5.71
 
     .. doctest::
         :hide:
 
-        >>> assert np.isclose(theta, np.arctan(slope)*180/np.pi, rtol=1e-2)
+        >>> assert np.isclose(theta, np.arctan(slope)*180/np.pi, rtol=1e-1)
 
     """
     x0, y0 = np.array(image.target_pixcoords).astype(int)
@@ -1198,7 +1224,8 @@ def turn_image(image):
                                     margin:-margin],
                           scale="symlog", title='Raw image (log10 scale)', units=image.units,
                           target_pixcoords=(image.target_pixcoords[0] - margin, 2 * parameters.YWINDOW), aspect='auto')
-        plot_compass_simple(ax1, image.parallactic_angle, arrow_size=0.1, origin=[0.15, 0.15])
+        if parameters.OBS_OBJECT_TYPE == "STAR":
+            plot_compass_simple(ax1, image.parallactic_angle, arrow_size=0.1, origin=[0.15, 0.15])
         ax2.axhline(parameters.YWINDOW, color='k')
         plot_image_simple(ax2, data=image.data_rotated[max(0, y0 - 2 * parameters.YWINDOW):
                                                        min(y0 + 2 * parameters.YWINDOW, image.data.shape[0]),
