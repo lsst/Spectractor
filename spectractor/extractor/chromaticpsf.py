@@ -376,7 +376,7 @@ class ChromaticPSF:
         poly_params = np.array([])
         amplitude = None
         for k, name in enumerate(self.psf.param_names):
-            if name is 'amplitude':
+            if name == 'amplitude':
                 amplitude = profile_params[:, k]
                 poly_params = np.concatenate([poly_params, amplitude])
         if amplitude is None:
@@ -384,11 +384,11 @@ class ChromaticPSF:
                                    'Polynomial fit for shape parameters will be unweighted.')
         for k, name in enumerate(self.psf.param_names):
             delta = 0
-            if name is not 'amplitude':
+            if name != 'amplitude':
                 weights = np.copy(amplitude)
-                if name is 'x_c':
+                if name == 'x_c':
                     delta = self.x0
-                if name is 'y_c':
+                if name == 'y_c':
                     delta = self.y0
                 fit = np.polynomial.legendre.legfit(pixels, profile_params[:, k] - delta,
                                                     deg=self.degrees[name], w=weights)
@@ -598,9 +598,9 @@ class ChromaticPSF:
         bounds = [[], []]
         for k, name in enumerate(self.psf.param_names):
             tmp_bounds = [[-np.inf] * (1 + self.degrees[name]), [np.inf] * (1 + self.degrees[name])]
-            if name is "saturation":
+            if name == "saturation":
                 tmp_bounds = [[0], [2 * self.saturation]]
-            elif name is "amplitude":
+            elif name == "amplitude":
                 continue
             bounds[0] += tmp_bounds[0]
             bounds[1] += tmp_bounds[1]
@@ -631,12 +631,12 @@ class ChromaticPSF:
             bounds = [[], []]
         for k, name in enumerate(self.psf.param_names):
             tmp_bounds = [[-np.inf] * (1 + self.degrees[name]), [np.inf] * (1 + self.degrees[name])]
-            if name is "saturation":
+            if name == "saturation":
                 if data is not None:
                     tmp_bounds = [[0.1 * np.max(data)], [2 * self.saturation]]
                 else:
                     tmp_bounds = [[0], [2 * self.saturation]]
-            elif name is "amplitude":
+            elif name == "amplitude":
                 continue
             bounds[0] += tmp_bounds[0]
             bounds[1] += tmp_bounds[1]
@@ -697,7 +697,7 @@ class ChromaticPSF:
                     in_bounds = False
                     penalty += np.abs(np.sum(profile_params[p < -noise_level, k]))  # / np.mean(np.abs(p))
                     outbound_parameter_name += name + ' '
-            elif name is "saturation":
+            elif name == "saturation":
                 continue
             else:
                 if np.any(p > self.psf.bounds[k][1]):
