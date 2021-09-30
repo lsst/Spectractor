@@ -110,6 +110,7 @@ LAMBDA_MIN = 300  # minimum wavelength for spectrum extraction (in nm)
 LAMBDA_MAX = 1100  # maximum wavelength for spectrum extraction (in nm)
 LAMBDA_STEP = 0.2  # step size for the wavelength array (in nm)
 LAMBDAS = np.arange(LAMBDA_MIN, LAMBDA_MAX, LAMBDA_STEP)
+SPEC_ORDER = 1  # spectrum order to extract
 
 # Background subtraction parameters
 PIXWIDTH_SIGNAL = 10  # half transverse width of the signal rectangular window in pixels
@@ -123,6 +124,7 @@ PSF_EXTRACTION_MODE = "PSF_1D"  # extraction mode: 1D or 2D
 PSF_TYPE = "Moffat"  # the PSF model: Moffat or MoffatGauss
 PSF_POLY_ORDER = 2  # the order of the polynomials to model wavelength dependence of the PSF shape parameters
 PSF_FIT_REG_PARAM = 0.01  # regularisation parameter for the chisq minimisation to extract the spectrum
+PSF_PIXEL_STEP_TRANSVERSE_FIT = 10  # step size in pixels for the first transverse PSF1D fit
 
 # Detection line algorithm
 CALIB_BGD_ORDER = 3  # order of the background polynome to fit

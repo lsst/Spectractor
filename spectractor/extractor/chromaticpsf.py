@@ -110,6 +110,8 @@ class ChromaticPSF:
                                                   + "^{(" + str(k) + ")}$")
         self.opt_reg = parameters.PSF_FIT_REG_PARAM
         self.cov_matrix = np.zeros((Nx, Nx))
+        if file_name != "":
+            self.poly_params = self.from_table_to_poly_params()
 
     def set_polynomial_degrees(self, deg):
         self.deg = deg
@@ -135,8 +137,7 @@ class ChromaticPSF:
 
         ..  doctest::
             :hide:
-
-            >>> assert(np.all(np.isclose(params,[10, 50, 100, 150, 200, 0, 0, 2, 0, 5, 0, 2, 0, -0.4, -0.4,1,0,20000])))
+            >>> assert(np.all(np.isclose(params,[10, 50, 100, 150, 200, 0, 0, 0, 0, 5, 0, 2, 0, -0.4, -0.4,1,0,20000])))
 
         """
         if not isinstance(self.psf, MoffatGauss) and not isinstance(self.psf, Moffat):
@@ -722,8 +723,9 @@ class ChromaticPSF:
         penalty *= self.Nx * self.Ny
         return in_bounds, penalty, outbound_parameter_name
 
-    def get_distance_along_dispersion_axis(self, shift_x=0, shift_y=0):
-        return np.asarray(np.sqrt((self.table['Dx'] - shift_x) ** 2 + (self.table['Dy_disp_axis'] - shift_y) ** 2))
+    def get_algebraic_distance_along_dispersion_axis(self, shift_x=0, shift_y=0):
+        return np.asarray(np.sign(self.table['Dx']) *
+                          np.sqrt((self.table['Dx'] - shift_x) ** 2 + (self.table['Dy_disp_axis'] - shift_y) ** 2))
 
     def plot_summary(self, truth=None):
         fig, ax = plt.subplots(2, 1, sharex='all', figsize=(12, 6))
@@ -749,6 +751,8 @@ class ChromaticPSF:
             params = [PSF_models[p][x] for p in range(len(self.psf.param_names))]
             params[:3] = [1, x, self.Ny // 2]
             out = self.psf.evaluate(np.asarray([xx, yy]), p=params)
+            if np.max(out) <= 0:
+                continue
             out /= np.max(out)
             img += out
         ax[1].imshow(img, origin='lower')  # , extent=[0, self.Nx,
@@ -903,6 +907,8 @@ class ChromaticPSF:
             # in case guess amplitude is too low
             # pdf = np.abs(signal)
             signal_sum = np.nansum(signal[middle - ws[0]:middle + ws[0]])
+            if signal_sum < 3 * np.nanstd(signal[bgd_index]):
+                continue
             # if signal_sum > 0:
             #     pdf /= signal_sum
             # mean = np.nansum(pdf * index)
@@ -918,6 +924,7 @@ class ChromaticPSF:
             # if guess[0] * (1 + 0*guess[4]) > 1.2 * maxi:
             #     guess[0] = 0.9 * maxi
             psf.p = guess
+            psf.bounds = bounds
             w = PSFFitWorkspace(psf, signal, data_errors=err[:, x], bgd_model_func=None,
                                 live_fit=False, verbose=False)
             try:
@@ -935,8 +942,9 @@ class ChromaticPSF:
             self.table['flux_err'][x] = np.sqrt(np.sum(err[:, x] ** 2))
             self.table['flux_sum'][x] = np.sum(signal)
             if live_fit and parameters.DISPLAY:  # pragma: no cover
-                w.live_fit = True
-                w.plot_fit()
+                if not np.any(np.isnan(best_fit[0])):
+                    w.live_fit = True
+                    w.plot_fit()
         # interpolate the skipped pixels with splines
         all_pixels = np.arange(Nx)
         xp = np.array(sorted(set(list(pixel_range))))
@@ -1034,7 +1042,7 @@ class ChromaticPSF:
         ..  doctest::
             :hide:
 
-            >>> residuals = (w.data-w.model)/w.err
+            >>> residuals = [(w.data[x]-w.model[x])/w.err[x] for x in range(w.Nx)]
             >>> assert w.costs[-1] /(w.Nx*w.Ny) < 1.5
             >>> assert np.abs(np.mean(residuals)) < 0.15
             >>> assert np.std(residuals) < 1.2
@@ -1060,7 +1068,7 @@ class ChromaticPSF:
         ..  doctest::
             :hide:
 
-            >>> residuals = (w.data-w.model)/w.err
+            >>> residuals = (w.data.flatten()-w.model.flatten())/w.err.flatten()
             >>> assert w.costs[-1] /(w.Nx*w.Ny) < 1.2
             >>> assert np.abs(np.mean(residuals)) < 0.15
             >>> assert np.std(residuals) < 1.2
@@ -1082,6 +1090,10 @@ class ChromaticPSF:
         else:
             raise ValueError(f"Unknown fitting mode={mode}. Must be '1D' or '2D'.")
 
+        # recompute and save params in class attributes
+        w.simulate(*w.p)
+
+        # regularisation
         if w.amplitude_priors_method == "psf1d" and mode == "2D":
             w_reg = RegFitWorkspace(w, opt_reg=parameters.PSF_FIT_REG_PARAM, verbose=verbose)
             run_minimisation(w_reg, method="minimize", ftol=1e-4, xtol=1e-2, verbose=verbose, epsilon=[1e-1],
@@ -1165,7 +1177,6 @@ class ChromaticPSFFitWorkspace(FitWorkspace):
         # prepare the background, data and errors
         self.bgd = np.zeros_like(self.data)
         if self.bgd_model_func is not None:
-            # xx, yy = np.meshgrid(np.arange(Nx), pixels)
             self.bgd = self.bgd_model_func(np.arange(self.Nx), self.pixels)
         self.data = self.data - self.bgd
         self.bgd_std = float(np.std(np.random.poisson(np.abs(self.bgd))))
@@ -1173,7 +1184,6 @@ class ChromaticPSFFitWorkspace(FitWorkspace):
         # crop spectrogram to fit faster
         self.bgd_width = parameters.PIXWIDTH_BACKGROUND + parameters.PIXDIST_BACKGROUND - parameters.PIXWIDTH_SIGNAL
         self.data = self.data[self.bgd_width:-self.bgd_width, :]
-        self.data_flat = self.data.flatten()
         self.pixels = np.arange(self.data.shape[0])
         self.err = np.copy(self.err[self.bgd_width:-self.bgd_width, :])
         self.Ny, self.Nx = self.data.shape
@@ -1185,9 +1195,9 @@ class ChromaticPSFFitWorkspace(FitWorkspace):
         # error matrix
         # here image uncertainties are assumed to be uncorrelated
         # (which is not exactly true in rotated images)
+        self.data_cov = (self.err * self.err).flatten()
         self.W = 1. / (self.err * self.err)
         self.W = self.W.flatten()
-        self.W_dot_data = self.W * self.data_flat  # np.diag(self.W) @ self.data.flatten()
 
         # design matrix
         self.M = np.zeros((self.Nx, self.data.size))
@@ -1218,18 +1228,29 @@ class ChromaticPSFFitWorkspace(FitWorkspace):
             self.amplitude_priors = np.copy(self.chromatic_psf.poly_params[:self.Nx])
 
     def plot_fit(self):
+        data = np.copy(self.data)
+        model = np.copy(self.model)
+        err = np.copy(self.err)
+        if isinstance(self, ChromaticPSF1DFitWorkspace):
+            data = np.array([data[x] for x in range(self.Nx)], dtype=float).T
+            model = np.array([model[x] for x in range(self.Nx)], dtype=float).T
+            err = np.array([err[x] for x in range(self.Nx)], dtype=float).T
+        if isinstance(self, ChromaticPSF2DFitWorkspace):
+            data = data.reshape((self.Ny, self.Nx))
+            model = model.reshape((self.Ny, self.Nx))
+            err = err.reshape((self.Ny, self.Nx))
         gs_kw = dict(width_ratios=[3, 0.15], height_ratios=[1, 1, 1, 1])
         fig, ax = plt.subplots(nrows=4, ncols=2, figsize=(7, 7), gridspec_kw=gs_kw)
-        norm = np.max(self.data)
-        plot_image_simple(ax[1, 0], data=self.model / norm, aspect='auto', cax=ax[1, 1], vmin=0, vmax=1,
+        norm = np.max(data)
+        plot_image_simple(ax[1, 0], data=model / norm, aspect='auto', cax=ax[1, 1], vmin=0, vmax=1,
                           units='1/max(data)')
         ax[1, 0].set_title("Model", fontsize=10, loc='center', color='white', y=0.8)
-        plot_image_simple(ax[0, 0], data=self.data / norm, title='Data', aspect='auto',
+        plot_image_simple(ax[0, 0], data=data / norm, title='Data', aspect='auto',
                           cax=ax[0, 1], vmin=0, vmax=1, units='1/max(data)')
         ax[0, 0].set_title('Data', fontsize=10, loc='center', color='white', y=0.8)
-        residuals = (self.data - self.model)
+        residuals = (data - model)
         # residuals_err = self.spectrum.spectrogram_err / self.model
-        norm = self.err
+        norm = err
         residuals /= norm
         std = float(np.std(residuals))
         plot_image_simple(ax[2, 0], data=residuals, vmin=-5 * std, vmax=5 * std, title='(Data-Model)/Err',
@@ -1243,13 +1264,13 @@ class ChromaticPSFFitWorkspace(FitWorkspace):
         ax[1, 1].get_yaxis().set_label_coords(3.5, 0.5)
         ax[2, 1].get_yaxis().set_label_coords(3.5, 0.5)
         ax[3, 1].remove()
-        ax[3, 0].errorbar(np.arange(self.Nx), self.data.sum(axis=0), yerr=np.sqrt(np.sum(self.err ** 2, axis=0)),
+        ax[3, 0].errorbar(np.arange(self.Nx), data.sum(axis=0), yerr=np.sqrt(np.sum(err ** 2, axis=0)),
                           label='Data', fmt='k.', markersize=0.1)
-        ax[3, 0].plot(np.arange(self.Nx), self.model.sum(axis=0), label='Model')
+        ax[3, 0].plot(np.arange(self.Nx), model.sum(axis=0), label='Model')
         ax[3, 0].set_ylabel('Transverse sum')
         ax[3, 0].set_xlabel(parameters.PLOT_XLABEL)
         ax[3, 0].legend(fontsize=7)
-        ax[3, 0].set_xlim((0, self.data.shape[1]))
+        ax[3, 0].set_xlim((0, data.shape[1]))
         ax[3, 0].grid(True)
         if self.live_fit:  # pragma: no cover
             plt.draw()
@@ -1279,9 +1300,22 @@ class ChromaticPSF1DFitWorkspace(ChromaticPSFFitWorkspace):
         # error matrix
         # here image uncertainties are assumed to be uncorrelated
         # (which is not exactly true in rotated images)
-        self.W = 1. / (self.err * self.err)
-        self.W = [self.W[:, x] for x in range(self.Nx)]  # [np.diag(self.W[:, x]) for x in range(self.Nx)]
-        self.W_dot_data = [self.W[x] * self.data[:, x] for x in range(self.Nx)]
+        self.data_cov = self.err * self.err
+        W = 1. / (self.err * self.err)
+        # these lines make the code thinks that W is block diagonal
+        self.W = np.empty(self.Nx, dtype=np.object)
+        for x in range(self.Nx):
+            self.W[x] = W[:, x]
+
+        # data: ordered by pixel columns
+        data = np.empty(self.Nx, dtype=np.object)
+        err = np.empty(self.Nx, dtype=np.object)
+        for x in range(self.Nx):
+            data[x] = self.data[:, x]
+            err[x] = self.err[:, x]
+        self.data = data
+        self.err = err
+        self.pixels = self.pixels.T
 
     def simulate(self, *shape_params):
         """
@@ -1337,7 +1371,7 @@ class ChromaticPSF1DFitWorkspace(ChromaticPSFFitWorkspace):
             :hide:
 
             >>> assert mod is not None
-            >>> assert np.mean(np.abs(mod-w.data)/w.err) < 1
+            >>> assert np.mean(np.abs(mod.flatten()-np.concatenate(w.data).ravel())/np.concatenate(w.err).ravel()) < 1
 
         Fit the amplitude of data smoothing the result with a window of size 10 pixels:
 
@@ -1350,7 +1384,7 @@ class ChromaticPSF1DFitWorkspace(ChromaticPSFFitWorkspace):
             :hide:
 
             >>> assert mod is not None
-            >>> assert np.mean(np.abs(mod-w.data)/w.err) < 1
+            >>> assert np.mean(np.abs(mod.flatten()-np.concatenate(w.data).ravel())/np.concatenate(w.err).ravel()) < 1
 
         Fit the amplitude of data using the transverse PSF1D fit as a prior and with a
         Tikhonov regularisation parameter set by parameters.PSF_FIT_REG_PARAM:
@@ -1364,7 +1398,7 @@ class ChromaticPSF1DFitWorkspace(ChromaticPSFFitWorkspace):
             :hide:
 
             >>> assert mod is not None
-            >>> assert np.mean(np.abs(mod-w.data)/w.err) < 1
+            >>> assert np.mean(np.abs(mod.flatten()-np.concatenate(w.data).ravel())/np.concatenate(w.err).ravel()) < 1
 
         Set the amplitude parameters fixing the transverse PSF1D fit amplitudes:
 
@@ -1377,7 +1411,7 @@ class ChromaticPSF1DFitWorkspace(ChromaticPSFFitWorkspace):
             :hide:
 
             >>> assert mod is not None
-            >>> assert np.mean(np.abs(mod-w.data)/w.err) < 1
+            >>> assert np.mean(np.abs(mod.flatten()-np.concatenate(w.data).ravel())/np.concatenate(w.err).ravel()) < 1
 
         """
         # linear regression for the amplitude parameters
@@ -1396,7 +1430,7 @@ class ChromaticPSF1DFitWorkspace(ChromaticPSFFitWorkspace):
                 cov_matrix = np.diag([1 / M_dot_W_dot_M[x] if M_dot_W_dot_M[x] > 0 else 0.1 * self.bgd_std
                                       for x in range(self.Nx)])
                 amplitude_params = np.array([
-                    M[x].T @ self.W_dot_data[x] / (M_dot_W_dot_M[x]) if M_dot_W_dot_M[x] > 0 else 0.1 * self.bgd_std
+                    M[x].T @ (self.W[x] * self.data[x]) / (M_dot_W_dot_M[x]) if M_dot_W_dot_M[x] > 0 else 0.1 * self.bgd_std
                     for x in range(self.Nx)])
                 if self.amplitude_priors_method == "positive":
                     amplitude_params[amplitude_params < 0] = 0
@@ -1420,13 +1454,14 @@ class ChromaticPSF1DFitWorkspace(ChromaticPSFFitWorkspace):
                 M_dot_W_dot_M_plus_Q = [M_dot_W_dot_M[x] + self.reg * self.Q[x, x] for x in range(self.Nx)]
                 cov_matrix = np.diag([1 / M_dot_W_dot_M_plus_Q[x] if M_dot_W_dot_M_plus_Q[x] > 0 else 0.1 * self.bgd_std
                                       for x in range(self.Nx)])
-                amplitude_params = [cov_matrix[x, x] * (M[x].T @ self.W_dot_data[x] + self.reg * self.Q_dot_A0[x])
+                amplitude_params = [cov_matrix[x, x] * (M[x].T @ (self.W[x] * self.data[x]) + self.reg * self.Q_dot_A0[x])
                                     for x in range(self.Nx)]
             self.M = M
             self.M_dot_W_dot_M = M_dot_W_dot_M
-            self.model = np.zeros_like(self.data)
+            self.model = np.zeros((self.Nx, self.Ny), dtype=float)
             for x in range(self.Nx):
-                self.model[:, x] = M[x] * amplitude_params[x]
+                self.model[x] = M[x] * amplitude_params[x]
+
         else:
             amplitude_params = np.copy(self.amplitude_priors)
             err2 = np.copy(amplitude_params)
@@ -1440,7 +1475,7 @@ class ChromaticPSF1DFitWorkspace(ChromaticPSFFitWorkspace):
         self.poly_params = np.copy(poly_params)
         poly_params[self.Nx + self.y_c_0_index] += self.bgd_width
         if self.amplitude_priors_method == "fixed":
-            self.model = self.chromatic_psf.evaluate(poly_params, mode="1D")[self.bgd_width:-self.bgd_width, :]
+            self.model = self.chromatic_psf.evaluate(poly_params, mode="1D")[self.bgd_width:-self.bgd_width, :].T
         self.model_err = np.zeros_like(self.model)
         return self.pixels, self.model, self.model_err
 
@@ -1463,7 +1498,8 @@ class ChromaticPSF2DFitWorkspace(ChromaticPSFFitWorkspace):
         # (which is not exactly true in rotated images)
         self.W = 1. / (self.err * self.err)
         self.W = self.W.flatten()
-        self.W_dot_data = self.W * self.data_flat  # np.diag(self.W) @ self.data.flatten()
+        self.data = self.data.flatten()
+        self.err = self.err.flatten()
 
         # regularisation matrices
         self.reg = parameters.PSF_FIT_REG_PARAM
@@ -1649,7 +1685,7 @@ class ChromaticPSF2DFitWorkspace(ChromaticPSFFitWorkspace):
                     cov_matrix = L.T @ L
                 except np.linalg.LinAlgError:
                     cov_matrix = np.linalg.inv(M_dot_W_dot_M)
-                amplitude_params = cov_matrix @ (M.T @ self.W_dot_data)
+                amplitude_params = cov_matrix @ (M.T @ (self.W * self.data))
                 if self.amplitude_priors_method == "positive":
                     amplitude_params[amplitude_params < 0] = 0
                 elif self.amplitude_priors_method == "smooth":
@@ -1675,10 +1711,10 @@ class ChromaticPSF2DFitWorkspace(ChromaticPSFFitWorkspace):
                     cov_matrix = L.T @ L
                 except np.linalg.LinAlgError:
                     cov_matrix = np.linalg.inv(M_dot_W_dot_M_plus_Q)
-                amplitude_params = cov_matrix @ (M.T @ self.W_dot_data + self.reg * self.Q_dot_A0)
+                amplitude_params = cov_matrix @ (M.T @ (self.W * self.data) + self.reg * self.Q_dot_A0)
             self.M = M
             self.M_dot_W_dot_M = M_dot_W_dot_M
-            self.model = (M @ amplitude_params).reshape((self.Ny, self.Nx))
+            self.model = (M @ amplitude_params)  #.reshape((self.Ny, self.Nx))
         else:
             amplitude_params = np.copy(self.amplitude_priors)
             err2 = np.copy(amplitude_params)

@@ -17,13 +17,114 @@ from spectractor.tools import (ensure_dir, load_fits, plot_image_simple,
 from spectractor.extractor.psf import load_PSF
 from spectractor.extractor.chromaticpsf import ChromaticPSF
 from spectractor.simulation.adr import adr_calib, flip_and_rotate_adr_to_image_xy_coordinates
+from spectractor.simulation.throughput import TelescopeTransmission
 
 
 class Spectrum:
+    """ Class used to store information and methods relative to spectra and their extraction.
+
+    Attributes
+    ----------
+    my_logger: logging
+        Logging object
+    fast_load: bool
+        If True, only load the spectrum but not the spectrogram.
+    units: str
+        Units of the spectrum.
+    lambdas: array
+        Spectrum wavelengths in nm.
+    data: array
+        Spectrum amplitude array in self.units units.
+    err: array
+        Spectrum amplitude uncertainties in self.units units.
+    cov_matrix: array
+        Spectrum amplitude covariance matrix between wavelengths in self.units units.
+    lambdas_binwidths: array
+        Bin widths of the wavelength array in nm.
+    lambdas_order2: array
+        Spectrum wavelengths for order 2 contamination in nm.
+    data_order2: array
+        Spectrum amplitude array  for order 2 contamination in self.units units.
+    err_order2: array
+        Spectrum amplitude uncertainties  for order 2 contamination in self.units units.
+    lambda_ref: float
+        Reference wavelength for ADR computations in nm.
+    order: int
+        Index of the diffraction order.
+    x0: array
+        Target position [x,y] in the image in pixels.
+    psf: PSF
+        PSF instance to model the spectrum PSF.
+    chromatic_psf: ChromaticPSF
+        ChromaticPSF object that contains data on the PSF shape and evolution in wavelength.
+    date_obs: str
+        Date of the observation.
+    airmass: float
+        Airmass of the current target.
+    expo: float
+        Exposure time in seconds.
+    disperser_label: str
+        Label of the disperser.
+    filter_label: str:
+        Label of the filter.
+    rotation_angle: float
+        Dispersion axis angle in the image in degrees, positive if anticlockwise.
+    parallactic_angle: float
+        Parallactic angle in degrees.
+    lines: Lines
+        Lines instance that contains data on the emission or absorption lines to be searched and fitted in the spectrum.
+    header: Fits.Header
+        FITS file header.
+    disperser: Disperser
+        Disperser instance that describes the disperser.
+    target: Target
+        Target instance that describes the current exposure.
+    dec: float
+        Declination coordinate of the current exposure.
+    hour_angle float
+        Hour angle coordinate of the current exposure.
+    temperature: float
+        Outside temperature in Celsius degrees.
+    pressure: float
+        Outside pressure in hPa.
+    humidity: float
+        Outside relative humidity in fraction of one.
+    spectrogram: array
+        Spectrogram 2D image in image units.
+    spectrogram_bgd: array
+        Estimated 2D background fitted below the spectrogram in image units.
+    spectrogram_bgd_rms: array
+        Estimated 2D background RMS fitted below the spectrogram in image units.
+    spectrogram_err: array
+        Estimated 2D background uncertainty fitted below the spectrogram in image units.
+    spectrogram_fit: array
+        Best fitting model of the spectrogram in image units.
+    spectrogram_residuals: array
+        Residuals between the spectrogram data and the best fitting model of the spectrogram in image units.
+    spectrogram_x0: float
+        Relative position of the target in the spectrogram array along the x axis.
+    spectrogram_y0: float
+        Relative position of the target in the spectrogram array along the y axis.
+    spectrogram_xmin: int
+        Left index of the spectrogram crop in the image.
+    spectrogram_xmax: int
+        Right index of the spectrogram crop in the image.
+    spectrogram_ymin: int
+        Bottom index of the spectrogram crop in the image.
+    spectrogram_ymax: int
+        Top index of the spectrogram crop in the image.
+    spectrogram_deg: int
+        Degree of the polynomial functions to model wavelength evolutions of the PSF parameters.
+    spectrogram_saturation: float
+        Level of saturation in the spectrogram in image units.
+    spectrogram_Nx: int
+        Size of the spectrogram along the x axis.
+    spectrogram_Ny: int
+        Size of the spectrogram along the y axis.
+    """
 
     def __init__(self, file_name="", image=None, order=1, target=None, config="", fast_load=False):
-        """ Spectrum class used to store information and methods
-        relative to spectra nd their extraction.
+        """ Class used to store information and methods relative to spectra and their extraction.
 
         Parameters
         ----------
@@ -75,11 +176,11 @@ class Spectrum:
         self.lambda_ref = None
         self.order = order
         self.chromatic_psf = None
-        self.filter = None
+        self.filter_label = ""
         self.filters = None
         self.units = 'ADU/s'
         self.gain = parameters.CCD_GAIN
-        self.psf = load_PSF(psf_type=parameters.PSF_TYPE)
+        self.psf = load_PSF(psf_type="Moffat", target=self.target)
         self.chromatic_psf = ChromaticPSF(self.psf, Nx=1, Ny=1, deg=1, saturation=1)
         self.rotation_angle = 0
         self.parallactic_angle = None
@@ -111,7 +212,7 @@ class Spectrum:
             self.airmass = image.airmass
             self.expo = image.expo
             self.filters = image.filters
-            self.filter = image.filter
+            self.filter_label = image.filter_label
             self.disperser_label = image.disperser_label
             self.disperser = image.disperser
             self.target = image.target
@@ -131,7 +232,6 @@ class Spectrum:
             self.parallactic_angle = image.parallactic_angle
             self.adr_params = [self.dec, self.hour_angle, self.temperature, self.pressure,
                                self.humidity, self.airmass]
-
         self.load_filter()
 
     def convert_from_ADUrate_to_flam(self):
@@ -154,7 +254,7 @@ class Spectrum:
             self.my_logger.warning(f"You ask to convert spectrum already in {self.units}"
                                    f" in erg/s/cm^2/nm... check your code ! Skip the instruction.")
             return
-        ldl = parameters.FLAM_TO_ADURATE * self.lambdas * self.lambdas_binwidths
+        ldl = parameters.FLAM_TO_ADURATE * self.lambdas * np.abs(self.lambdas_binwidths)
         self.data /= ldl
         if self.err is not None:
             self.err /= ldl
@@ -162,7 +262,7 @@ class Spectrum:
             ldl_mat = np.outer(ldl, ldl)
             self.cov_matrix /= ldl_mat
         if self.data_order2 is not None:
-            ldl_2 = parameters.FLAM_TO_ADURATE * self.lambdas_order2 * np.gradient(self.lambdas_order2)
+            ldl_2 = parameters.FLAM_TO_ADURATE * self.lambdas_order2 * np.abs(np.gradient(self.lambdas_order2))
             self.data_order2 /= ldl_2
             self.err_order2 /= ldl_2
         self.units = 'erg/s/cm$^2$/nm'
@@ -187,7 +287,7 @@ class Spectrum:
             self.my_logger.warning(f"You ask to convert spectrum already in {self.units} in ADU/s... check your code ! "
                                    f"Skip the instruction")
             return
-        ldl = parameters.FLAM_TO_ADURATE * self.lambdas * self.lambdas_binwidths
+        ldl = parameters.FLAM_TO_ADURATE * self.lambdas * np.abs(self.lambdas_binwidths)
         self.data *= ldl
         if self.err is not None:
             self.err *= ldl
@@ -195,7 +295,7 @@ class Spectrum:
             ldl_mat = np.outer(ldl, ldl)
             self.cov_matrix *= ldl_mat
         if self.data_order2 is not None:
-            ldl_2 = parameters.FLAM_TO_ADURATE * self.lambdas_order2 * np.gradient(self.lambdas_order2)
+            ldl_2 = parameters.FLAM_TO_ADURATE * self.lambdas_order2 * np.abs(np.gradient(self.lambdas_order2))
             self.data_order2 *= ldl_2
             self.err_order2 *= ldl_2
         self.units = 'ADU/s'
@@ -206,23 +306,19 @@ class Spectrum:
         Examples
         --------
         >>> s = Spectrum()
-        >>> s.filter = 'FGB37'
+        >>> s.filter_label = 'FGB37'
         >>> s.load_filter()
 
         .. doctest::
             :hide:
 
-            >>> assert parameters.LAMBDA_MIN == parameters.FGB37['min']
-            >>> assert parameters.LAMBDA_MAX == parameters.FGB37['max']
+            >>> assert np.isclose(parameters.LAMBDA_MIN, 300)
+            >>> assert np.isclose(parameters.LAMBDA_MAX, 760)
 
         """
-        for f in parameters.FILTERS:
-            if f['label'] == self.filter:
-                parameters.LAMBDA_MIN = f['min']
-                parameters.LAMBDA_MAX = f['max']
-                self.my_logger.info('\n\tLoad filter %s: lambda between %.1f and %.1f' % (
-                    f['label'], parameters.LAMBDA_MIN, parameters.LAMBDA_MAX))
-                break
+        if self.filter_label != "" and "empty" not in self.filter_label.lower():
+            t = TelescopeTransmission(filter_label=self.filter_label)
+            t.reset_lambda_range(transmission_threshold=1e-4)
 
     def plot_spectrum(self, ax=None, xlim=None, live_fit=False, label='', force_lines=False):
         """Plot spectrum with emission and absorption lines.
@@ -259,18 +355,20 @@ class Spectrum:
         if self.lambdas_order2 is not None:
             distance = self.disperser.grating_lambda_to_pixel(self.lambdas_order2, self.x0, order=2)
             lambdas_order2_contamination = self.disperser.grating_pixel_to_lambda(distance, self.x0, order=1)
-            data_order2_contamination = self.data_order2 * (self.lambdas_order2 * np.gradient(self.lambdas_order2))\
+            data_order2_contamination = self.data_order2 * (self.lambdas_order2 * np.gradient(self.lambdas_order2)) \
                                         / (lambdas_order2_contamination * np.gradient(lambdas_order2_contamination))
             if np.sum(data_order2_contamination) / np.sum(self.data) > 0.01:
                 data_interp = interp1d(self.lambdas, self.data, kind="linear", fill_value="0", bounds_error=False)
                 plot_spectrum_simple(ax, lambdas_order2_contamination,
-                                     data_interp(lambdas_order2_contamination) + data_order2_contamination, data_err=None,
-                                     xlim=xlim, label='Order 2 contamination', linestyle="--", lw=1)
+                                     data_interp(lambdas_order2_contamination) + data_order2_contamination,
+                                     data_err=None, xlim=xlim, label='Order 2 contamination', linestyle="--", lw=1)
         plot_spectrum_simple(ax, self.lambdas, self.data, data_err=self.err, xlim=xlim, label=label,
                              title=title, units=self.units)
         if len(self.target.spectra) > 0:
             for k in range(len(self.target.spectra)):
-                s = self.target.spectra[k] / np.max(self.target.spectra[k]) * np.max(self.data)
+                plot_indices = np.logical_and(self.target.wavelengths[k] > np.min(self.lambdas),
+                                              self.target.wavelengths[k] < np.max(self.lambdas))
+                s = self.target.spectra[k] / np.max(self.target.spectra[k][plot_indices]) * np.max(self.data)
                 ax.plot(self.target.wavelengths[k], s, lw=2, label='Tabulated spectra #%d' % k)
         if self.lambdas is not None:
             self.lines.plot_detected_lines(ax, print_table=parameters.VERBOSE)
@@ -393,11 +491,15 @@ class Spectrum:
         hdu2.header["EXTNAME"] = "SPEC_COV"
         hdu3 = fits.ImageHDU()
         hdu3.header["EXTNAME"] = "ORDER2"
+        hdu4 = fits.ImageHDU()
+        hdu4.header["EXTNAME"] = "ORDER0"
         hdu1.data = [self.lambdas, self.data, self.err]
-        if parameters.PSF_EXTRACTION_MODE == "PSF_2D":
-            hdu2.data = self.cov_matrix
-            hdu3.data = [self.lambdas_order2, self.data_order2, self.err_order2]
-        hdu = fits.HDUList([hdu1, hdu2, hdu3])
+        hdu2.data = self.cov_matrix
+        hdu3.data = [self.lambdas_order2, self.data_order2, self.err_order2]
+        hdu4.data = self.target.image
+        hdu4.header["IM_X0"] = self.target.image_x0
+        hdu4.header["IM_Y0"] = self.target.image_y0
+        hdu = fits.HDUList([hdu1, hdu2, hdu3, hdu4])
         output_directory = '/'.join(output_file_name.split('/')[:-1])
         ensure_dir(output_directory)
         hdu.writeto(output_file_name, overwrite=overwrite)
@@ -494,29 +596,43 @@ class Spectrum:
                 self.x0 = [self.header['TARGETX'], self.header['TARGETY']]
             if self.header['D2CCD'] != "":
                 parameters.DISTANCE2CCD = float(self.header["D2CCD"])
-            if self.header['DEC'] != "":
+            if 'DEC' in self.header and self.header['DEC'] != "":
                 self.dec = self.header['DEC']
-            if self.header['HA'] != "":
+            if 'RA' in self.header and self.header['HA'] != "":
                 self.hour_angle = self.header['HA']
-            if self.header['OUTTEMP'] != "":
+            if 'OUTTEMP' in self.header and self.header['OUTTEMP'] != "":
                 self.temperature = self.header['OUTTEMP']
-            if self.header['OUTPRESS'] != "":
+            if 'OUTPRESS' in self.header and self.header['OUTPRESS'] != "":
                 self.pressure = self.header['OUTPRESS']
-            if self.header['OUTHUM'] != "":
+            if 'OUTHUM' in self.header and self.header['OUTHUM'] != "":
                 self.humidity = self.header['OUTHUM']
             if self.header['LBDA_REF'] != "":
                 self.lambda_ref = self.header['LBDA_REF']
-            if self.header['PARANGLE'] != "":
+            if 'PARANGLE' in self.header and self.header['PARANGLE'] != "":
                 self.parallactic_angle = self.header['PARANGLE']
+            if 'CCDREBIN' in self.header and self.header['CCDREBIN'] != "":
+                parameters.CCD_REBIN = self.header['CCDREBIN']
 
             self.my_logger.info('\n\tLoading disperser %s...' % self.disperser_label)
             self.disperser = Hologram(self.disperser_label, D=parameters.DISTANCE2CCD,
                                       data_dir=parameters.DISPERSER_DIR, verbose=parameters.VERBOSE)
             self.my_logger.info('\n\tSpectrum loaded from %s' % input_file_name)
             spectrogram_file_name = input_file_name.replace('spectrum', 'spectrogram')
-            self.adr_params = [self.dec, self.hour_angle, self.temperature,
-                               self.pressure, self.humidity, self.airmass]
+            if parameters.OBS_OBJECT_TYPE == "STAR":
+                self.adr_params = [self.dec, self.hour_angle, self.temperature,
+                                   self.pressure, self.humidity, self.airmass]
 
+            hdu_list = fits.open(input_file_name)
+            if len(hdu_list) > 1:
+                self.cov_matrix = hdu_list["SPEC_COV"].data
+                if len(hdu_list) > 2:
+                    self.lambdas_order2, self.data_order2, self.err_order2 = hdu_list["ORDER2"].data
+                    if len(hdu_list) > 3:
+                        self.target.image = hdu_list["ORDER0"].data
+                        self.target.image_x0 = float(hdu_list["ORDER0"].header["IM_X0"])
+                        self.target.image_y0 = float(hdu_list["ORDER0"].header["IM_Y0"])
+            else:
+                self.cov_matrix = np.diag(self.err ** 2)
             if not self.fast_load:
                 self.my_logger.info(f'\n\tLoading spectrogram from {spectrogram_file_name}...')
                 if os.path.isfile(spectrogram_file_name):
@@ -529,13 +645,6 @@ class Spectrum:
                     self.load_chromatic_psf(psf_file_name)
                 else:
                     raise FileNotFoundError(f"PSF file {psf_file_name} does not exist.")
-            hdu_list = fits.open(input_file_name)
-            if len(hdu_list) > 1:
-                self.cov_matrix = hdu_list["SPEC_COV"].data
-                if len(hdu_list) > 2:
-                    self.lambdas_order2, self.data_order2, self.err_order2 = hdu_list["ORDER2"].data
-            else:
-                self.cov_matrix = np.diag(self.err ** 2)
         else:
             raise FileNotFoundError(f'\n\tSpectrum file {input_file_name} not found')
 
@@ -587,14 +696,13 @@ class Spectrum:
 
         Examples
         --------
-        >>> parameters.PSF_TYPE = "MoffatGauss"
         >>> s = Spectrum()
         >>> s.load_spectrum('./tests/data/reduc_20170530_134_spectrum.fits')
-        >>> print(s.chromatic_psf.table)  # doctest: +ELLIPSIS
-             lambdas               Dx         ...
+        >>> print(s.chromatic_psf.table)  #doctest: +ELLIPSIS
+             lambdas               Dx        ...
         """
         if os.path.isfile(input_file_name):
-            self.psf = load_PSF(psf_type=parameters.PSF_TYPE)
+            self.psf = load_PSF(psf_type=parameters.PSF_TYPE, target=self.target)
             self.chromatic_psf = ChromaticPSF(self.psf, self.spectrogram_Nx, self.spectrogram_Ny,
                                               x0=self.spectrogram_x0, y0=self.spectrogram_y0,
                                               deg=self.spectrogram_deg, saturation=self.spectrogram_saturation,
@@ -653,12 +761,12 @@ def detect_lines(lines, lambdas, spec, spec_err=None, cov_matrix=None, fwhm_func
     Creation of a mock spectrum with emission and absorption lines:
 
     >>> import numpy as np
-    >>> from spectractor.extractor.spectroscopy import Lines, HALPHA, HBETA, O2
+    >>> from spectractor.extractor.spectroscopy import Lines, HALPHA, HBETA, O2_1
     >>> lambdas = np.arange(300,1000,1)
     >>> spectrum = 1e4*np.exp(-((lambdas-600)/200)**2)
     >>> spectrum += HALPHA.gaussian_model(lambdas, A=5000, sigma=3)
     >>> spectrum += HBETA.gaussian_model(lambdas, A=3000, sigma=2)
-    >>> spectrum += O2.gaussian_model(lambdas, A=-3000, sigma=7)
+    >>> spectrum += O2_1.gaussian_model(lambdas, A=-3000, sigma=7)
     >>> spectrum_err = np.sqrt(spectrum)
     >>> cov = np.diag(spectrum_err)
     >>> spectrum = np.random.poisson(spectrum)
@@ -670,7 +778,7 @@ def detect_lines(lines, lambdas, spec, spec_err=None, cov_matrix=None, fwhm_func
 
     Detect the lines:
 
-    >>> lines = Lines([HALPHA, HBETA, O2], hydrogen_only=True,
+    >>> lines = Lines([HALPHA, HBETA, O2_1], hydrogen_only=True,
     ... atmospheric_lines=True, redshift=0, emission_spectrum=True)
     >>> global_chisq = detect_lines(lines, lambdas, spectrum, spectrum_err, cov, fwhm_func=fwhm_func)
 
@@ -825,11 +933,18 @@ def detect_lines(lines, lambdas, spec, spec_err=None, cov_matrix=None, fwhm_func
         idx = merges[-1][-1]
         if idx == len(index_list) - 1:
             break
-        if index_list[idx][-1] > index_list[idx + 1][0]:
-            merges[-1].append(idx + 1)
-        else:
-            merges.append([idx + 1])
-            idx += 1
+        if index_list[idx + 1][0] > index_list[idx][0]:  # increasing order
+            if index_list[idx][-1] > index_list[idx + 1][0]:
+                merges[-1].append(idx + 1)
+            else:
+                merges.append([idx + 1])
+                idx += 1
+        else:  # decreasing order
+            if index_list[idx][0] < index_list[idx + 1][-1]:
+                merges[-1].append(idx + 1)
+            else:
+                merges.append([idx + 1])
+                idx += 1
     # reorder merge list with respect to lambdas in guess list
     new_merges = []
     for merge in merges:
@@ -900,14 +1015,23 @@ def detect_lines(lines, lambdas, spec, spec_err=None, cov_matrix=None, fwhm_func
         bounds[1] = [np.inf] * bgd_npar + bounds[1]
         if len(bgd_index) > 0:
             try:
-                fit, cov, model = fit_poly1d_legendre(lambdas[bgd_index], spec[bgd_index],
-                                                      order=bgd_npar - 1, w=1. / spec_err[bgd_index])
+                if spec_err is not None:
+                    w = 1. / spec_err[bgd_index]
+                else:
+                    w = np.ones_like(lambdas[bgd_index])
+                fit, cov, model = fit_poly1d_legendre(lambdas[bgd_index], spec[bgd_index], order=bgd_npar - 1, w=w)
             except:
-                fit, cov, model = fit_poly1d_legendre(lambdas[index], spec[index],
-                                                      order=bgd_npar - 1, w=1. / spec_err[index])
+                if spec_err is not None:
+                    w = 1. / spec_err[index]
+                else:
+                    w = np.ones_like(lambdas[index])
+                fit, cov, model = fit_poly1d_legendre(lambdas[index], spec[index], order=bgd_npar - 1, w=w)
         else:
-            fit, cov, model = fit_poly1d_legendre(lambdas[index], spec[index],
-                                                  order=bgd_npar - 1, w=1. / spec_err[index])
+            if spec_err is not None:
+                w = 1. / spec_err[index]
+            else:
+                w = np.ones_like(lambdas[index])
+            fit, cov, model = fit_poly1d_legendre(lambdas[index], spec[index], order=bgd_npar - 1, w=w)
         # lines.my_logger.warning(f'{bgd_npar} {fit}')
         # fig = plt.figure()
         # plt.plot(lambdas[index], spec[index])
@@ -970,14 +1094,14 @@ def detect_lines(lines, lambdas, spec, spec_err=None, cov_matrix=None, fwhm_func
             snr = np.abs(signal_level / noise_level)
             # save fit results
             line.fitted = True
+            line.fit_index = index
             line.fit_lambdas = lambdas[index]
 
             x_norm = rescale_x_for_legendre(lambdas[index])
 
             x_step = 0.1  # nm
-            x_int = np.arange(max(lambdas[0], peak_pos - 5 * np.abs(popt[bgd_npar + 3 * j + 2])),
-                              min(lambdas[-1], peak_pos + 5 * np.abs(popt[bgd_npar + 3 * j + 2])), x_step)
-
+            x_int = np.arange(max(np.min(lambdas), peak_pos - 5 * np.abs(popt[bgd_npar + 3 * j + 2])),
+                              min(np.max(lambdas), peak_pos + 5 * np.abs(popt[bgd_npar + 3 * j + 2])), x_step)
             middle = 0.5 * (np.max(lambdas[index]) + np.min(lambdas[index]))
             x_int_norm = x_int - middle
             if np.max(lambdas[index] - middle) != 0:
@@ -986,6 +1110,8 @@ def detect_lines(lines, lambdas, spec, spec_err=None, cov_matrix=None, fwhm_func
             # jmin and jmax a bit larger than x_int to avoid extrapolation
             jmin = max(0, int(np.argmin(np.abs(lambdas - (x_int[0] - x_step))) - 2))
             jmax = min(len(lambdas), int(np.argmin(np.abs(lambdas - (x_int[-1] + x_step))) + 2))
+            if jmax-2 < jmin+2:  # decreasing order
+                jmin, jmax = max(0, jmax-4), min(len(lambdas), jmin+4)
             spectr_data = interp1d(lambdas[jmin:jmax], spec[jmin:jmax],
                                    bounds_error=False, fill_value="extrapolate")(x_int)
 
@@ -999,6 +1125,7 @@ def detect_lines(lines, lambdas, spec, spec_err=None, cov_matrix=None, fwhm_func
             line.fit_eqwidth_data = integrate.simps(Ydata, x_int)  # sol2
 
             line.fit_popt = popt
+            line.fit_popt_gaussian = popt[bgd_npar + 3 * j:bgd_npar + 3 * j + 3]
             line.fit_gauss = gauss(lambdas[index], *popt[bgd_npar + 3 * j:bgd_npar + 3 * j + 3])
 
             line.fit_bgd = np.polynomial.legendre.legval(x_norm, popt[:bgd_npar])
@@ -1029,7 +1156,7 @@ def detect_lines(lines, lambdas, spec, spec_err=None, cov_matrix=None, fwhm_func
     return global_chisq
 
 
-def calibrate_spectrum(spectrum):
+def calibrate_spectrum(spectrum, with_adr=False):
     """Convert pixels into wavelengths given the position of the order 0,
     the data for the spectrum, the properties of the disperser. Fit the absorption
     (and eventually the emission) lines to perform a second calibration of the
@@ -1042,6 +1169,9 @@ def calibrate_spectrum(spectrum):
     ----------
     spectrum: Spectrum
         Spectrum object to calibrate
+    with_adr: bool, optional
+        If True, the ADR longitudinal shift is subtracted to distances.
+        Must be False if the spectrum has already been decontaminated from ADR (default: False).
 
     Returns
     -------
@@ -1053,10 +1183,11 @@ def calibrate_spectrum(spectrum):
     >>> spectrum = Spectrum('tests/data/reduc_20170605_028_spectrum.fits')
     >>> parameters.LAMBDA_MIN = 550
     >>> parameters.LAMBDA_MAX = 800
-    >>> lambdas = calibrate_spectrum(spectrum)
+    >>> lambdas = calibrate_spectrum(spectrum, with_adr=False)
     >>> spectrum.plot_spectrum()
     """
-    distance = spectrum.chromatic_psf.get_distance_along_dispersion_axis()
+    with_adr = int(with_adr)
+    distance = spectrum.chromatic_psf.get_algebraic_distance_along_dispersion_axis()
     spectrum.lambdas = spectrum.disperser.grating_pixel_to_lambda(distance, spectrum.x0, order=spectrum.order)
     if spectrum.lambda_ref is None:
         lambda_ref = np.sum(spectrum.lambdas * spectrum.data) / np.sum(spectrum.data)
@@ -1064,10 +1195,13 @@ def calibrate_spectrum(spectrum):
         spectrum.header['LBDA_REF'] = lambda_ref
     # ADR is x>0 westward and y>0 northward while CTIO images are x>0 westward and y>0 southward
     # Must project ADR along dispersion axis
-    adr_ra, adr_dec = adr_calib(spectrum.lambdas, spectrum.adr_params, parameters.OBS_LATITUDE,
-                                lambda_ref=spectrum.lambda_ref)
-    adr_u, _ = flip_and_rotate_adr_to_image_xy_coordinates(adr_ra, adr_dec,
-                                                           dispersion_axis_angle=spectrum.rotation_angle)
+    if with_adr > 0:
+        adr_ra, adr_dec = adr_calib(spectrum.lambdas, spectrum.adr_params, parameters.OBS_LATITUDE,
+                                    lambda_ref=spectrum.lambda_ref)
+        adr_u, _ = flip_and_rotate_adr_to_image_xy_coordinates(adr_ra, adr_dec,
+                                                               dispersion_axis_angle=spectrum.rotation_angle)
+    else:
+        adr_u = np.zeros_like(distance)
     x0 = spectrum.x0
     if x0 is None:
         x0 = spectrum.target_pixcoords
@@ -1080,8 +1214,8 @@ def calibrate_spectrum(spectrum):
 
     def shift_minimizer(params):
         spectrum.disperser.D, shift = params
-        dist = spectrum.chromatic_psf.get_distance_along_dispersion_axis(shift_x=shift)
-        spectrum.lambdas = spectrum.disperser.grating_pixel_to_lambda(dist - adr_u,
+        dist = spectrum.chromatic_psf.get_algebraic_distance_along_dispersion_axis(shift_x=shift)
+        spectrum.lambdas = spectrum.disperser.grating_pixel_to_lambda(dist - with_adr * adr_u,
                                                                       x0=[x0[0] + shift, x0[1]], order=spectrum.order)
         spectrum.lambdas_binwidths = np.gradient(spectrum.lambdas)
         spectrum.convert_from_ADUrate_to_flam()
@@ -1102,8 +1236,8 @@ def calibrate_spectrum(spectrum):
     if spectrum.header['D2CCD'] != '':
         D = spectrum.header['D2CCD']
     D_err = parameters.DISTANCE2CCD_ERR
-    D_step = D_err / 4
-    pixel_shift_step = parameters.PIXSHIFT_PRIOR / 10
+    D_step = D_err / 2
+    pixel_shift_step = parameters.PIXSHIFT_PRIOR / 5
     pixel_shift_prior = parameters.PIXSHIFT_PRIOR
     Ds = np.arange(D - 5 * D_err, D + 6 * D_err, D_step)
     pixel_shifts = np.arange(-pixel_shift_prior, pixel_shift_prior + pixel_shift_step, pixel_shift_step)
@@ -1145,23 +1279,28 @@ def calibrate_spectrum(spectrum):
     #                    bounds=((D - 5 * parameters.DISTANCE2CCD_ERR, D + 5 * parameters.DISTANCE2CCD_ERR), (-2, 2)))
     error = [parameters.DISTANCE2CCD_ERR, pixel_shift_step]
     fix = [False, False]
-    m = Minuit.from_array_func(fcn=shift_minimizer, start=start, error=error, errordef=1, fix=fix, print_level=0,
-                               limit=((D - 5 * parameters.DISTANCE2CCD_ERR, D + 5 * parameters.DISTANCE2CCD_ERR),
-                                      (-2, 2)))
+    m = Minuit(shift_minimizer, start)
+    m.errors = error
+    m.errordef = 1
+    m.fixed = fix
+    m.print_level = 0
+    m.limits = ((D - 5 * parameters.DISTANCE2CCD_ERR, D + 5 * parameters.DISTANCE2CCD_ERR), (-2, 2))
     m.migrad()
     # if parameters.DEBUG:
     #     print(m.prin)
     # if not res.success:
     #     spectrum.my_logger.warning('\n\tMinimizer failed.')
     #     print(res)
-    D, pixel_shift = m.np_values()
+    D, pixel_shift = np.array(m.values[:])
     spectrum.disperser.D = D
     x0 = [x0[0] + pixel_shift, x0[1]]
     spectrum.x0 = x0
     # check success, xO or D on the edge of their priors
-    distance = spectrum.chromatic_psf.get_distance_along_dispersion_axis(shift_x=pixel_shift)
-    lambdas = spectrum.disperser.grating_pixel_to_lambda(distance - adr_u, x0=x0, order=spectrum.order)
+    distance = spectrum.chromatic_psf.get_algebraic_distance_along_dispersion_axis(shift_x=pixel_shift)
+    lambdas = spectrum.disperser.grating_pixel_to_lambda(distance - with_adr * adr_u, x0=x0, order=spectrum.order)
     spectrum.lambdas = lambdas
+    spectrum.lambdas_order2 = spectrum.disperser.grating_pixel_to_lambda(distance - with_adr * adr_u, x0=x0,
+                                                                         order=spectrum.order + 1)
     spectrum.lambdas_binwidths = np.gradient(lambdas)
     spectrum.convert_from_ADUrate_to_flam()
     spectrum.chromatic_psf.table['Dx'] -= pixel_shift

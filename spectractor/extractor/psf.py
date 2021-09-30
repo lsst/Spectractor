@@ -2,6 +2,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import special
+from scipy.interpolate import interp2d
 
 from spectractor.tools import plot_image_simple
 from spectractor import parameters
@@ -413,7 +414,7 @@ class PSF:
 
         Fit the data in 2D:
 
-        >>> p = np.array([150000, 19, 31, 4, 3, -0.1, 3, 400000])
+        >>> p = np.array([150000, 19, 31, 4.5, 2.5, -0.1, 3, 400000])
         >>> psf = MoffatGauss(p)
         >>> w = psf.fit_psf(data, data_errors=data_errors, bgd_model_func=None)
         >>> w.plot_fit()
@@ -430,9 +431,9 @@ class PSF:
 
         Fit the data in 1D:
 
-        >>> data1d = data[:,int(p[1])]
-        >>> data1d_err = data_errors[:,int(p[1])]
-        >>> p = np.array([10000, 20, 32, 3, 3, -0.2, 1, 400000])
+        >>> data1d = data[:,int(p0[1])]
+        >>> data1d_err = data_errors[:,int(p0[1])]
+        >>> p = np.array([10000, 20, 32, 4, 3, -0.1, 2, 400000])
         >>> psf1d = MoffatGauss(p)
         >>> w = psf1d.fit_psf(data1d, data_errors=data1d_err, bgd_model_func=None)
         >>> w.plot_fit()
@@ -638,6 +639,128 @@ class MoffatGauss(PSF):
             raise ValueError(f"Pixels array must have dimension 1 or shape=(2,Nx,Ny). Here pixels.ndim={pixels.shape}.")
 
 
+class Order0(PSF):
+
+    def __init__(self, target, p=None):
+        PSF.__init__(self)
+        self.p_default = np.array([1, 0, 0, 1, 1]).astype(float)
+        if p is not None:
+            self.p = np.asarray(p).astype(float)
+        else:
+            self.p = np.copy(self.p_default)
+        self.param_names = ["amplitude", "x_c", "y_c", "gamma", "saturation"]
+        self.axis_names = ["$A$", r"$x_c$", r"$y_c$", r"$\gamma$", "saturation"]
+        self.bounds = np.array([(0, np.inf), (-np.inf, np.inf), (-np.inf, np.inf), (0.5, 5), (0, np.inf)])
+        self.psf_func = self.build_interpolated_functions(target=target)
+
+    def build_interpolated_functions(self, target):
+        """Interpolate the order 0 image and make 1D and 2D functions centered on its centroid, with varying width
+        and normalized to get an integral equal to unity.
+
+        Parameters
+        ----------
+        target: Target
+            The target with a target.image attribute to interpolate.
+
+        Returns
+        -------
+        func: Callable
+            The 2D interpolated function centered in (target.image_x0, target.image_y0).
+        """
+        xx = np.arange(0, target.image.shape[1]) - target.image_x0
+        yy = np.arange(0, target.image.shape[0]) - target.image_y0
+        data = target.image / np.sum(target.image)
+        tmp_func = interp2d(xx, yy, data, bounds_error=False, fill_value=None)
+
+        def func(x, y, amplitude, x_c, y_c, gamma):
+            return amplitude * tmp_func((x - x_c)/gamma, (y - y_c)/gamma)
+
+        return func
+
+    def apply_max_width_to_bounds(self, max_half_width=None):
+        if max_half_width is not None:
+            self.max_half_width = max_half_width
+        self.bounds = np.array([(0, np.inf), (-np.inf, np.inf), (0, 2 * self.max_half_width), (0.5, 5), (0, np.inf)])
+
+    def evaluate(self, pixels, p=None):
+        r"""Evaluate the Order 0 interpolated function.
+
+        The function is normalized to have an integral equal to amplitude parameter.
+
+        Parameters
+        ----------
+        pixels: list
+            List containing the X abscisse 2D array and the Y abscisse 2D array.
+        p: array_like
+            The parameter array. If None, the array used to instanciate the class is taken.
+            If given, the class instance parameter array is updated.
+
+        Returns
+        -------
+        output: array_like
+            The PSF function evaluated.
+
+        Examples
+        --------
+        >>> from spectractor.extractor.images import Image, find_target
+        >>> im = Image('tests/data/reduc_20170605_028.fits', target_label="PNG321.0+3.9")
+        >>> im.plot_image()
+        >>> guess = [820, 580]
+        >>> parameters.VERBOSE = True
+        >>> parameters.DEBUG = True
+        >>> x0, y0 = find_target(im, guess)
+
+        >>> p = [1,40,50,1,1e20]
+        >>> psf = Order0(target=im.target, p=p)
+
+        2D evaluation:
+
+        >>> yy, xx = np.mgrid[:80, :100]
+        >>> out = psf.evaluate(pixels=np.array([xx, yy]))
+
+        1D evaluation:
+
+        >>> out = psf.evaluate(pixels=np.arange(100))
+
+        .. plot::
+
+            import matplotlib.pyplot as plt
+            import numpy as np
+            from spectractor.extractor.psf import Moffat, Order0
+            from spectractor.extractor.images import Image, find_target
+            im = Image('tests/data/reduc_20170605_028.fits', target_label="PNG321.0+3.9")
+            im.plot_image()
+            guess = [820, 580]
+            parameters.VERBOSE = True
+            parameters.DEBUG = True
+            x0, y0 = find_target(im, guess)
+            p = [1,40,50,1,1e20]
+            psf = Order0(target=im.target, p=p)
+            yy, xx = np.mgrid[:80, :100]
+            out = psf.evaluate(pixels=np.array([xx, yy]))
+            fig = plt.figure(figsize=(5,5))
+            plt.imshow(out, origin="lower")
+            plt.xlabel("X [pixels]")
+            plt.ylabel("Y [pixels]")
+            plt.grid()
+            plt.show()
+
+        """
+        if p is not None:
+            self.p = np.asarray(p).astype(float)
+        amplitude, x_c, y_c, gamma, saturation = self.p
+        if pixels.ndim == 3 and pixels.shape[0] == 2:
+            x, y = pixels  # .astype(np.float32)  # float32 to increase rapidity
+            return np.clip(self.psf_func(x[0], y[:, 0], amplitude, x_c, y_c, gamma), 0, saturation)
+        elif pixels.ndim == 1:
+            y = np.array(pixels)
+            out = self.psf_func(x_c, y, amplitude, x_c, y_c, gamma).T[0]
+            out *= amplitude / np.sum(out)
+            return np.clip(out, 0, saturation)
+        else:  # pragma: no cover
+            raise ValueError(f"Pixels array must have dimension 1 or shape=(2,Nx,Ny). Here pixels.ndim={pixels.shape}.")
+
+
 class PSFFitWorkspace(FitWorkspace):
     """Generic PSF fitting workspace.
 
@@ -706,6 +829,9 @@ class PSFFitWorkspace(FitWorkspace):
             self.psf.apply_max_width_to_bounds(self.Ny)
             yy, xx = np.mgrid[:self.Ny, :self.Nx]
             self.pixels = np.asarray([xx, yy])
+            # flat data for fitworkspace
+            self.data = self.data.flatten()
+            self.err = self.err.flatten()
         elif data.ndim == 1:
             self.Ny = self.data.size
             self.Nx = 1
@@ -724,8 +850,6 @@ class PSFFitWorkspace(FitWorkspace):
         # here image uncertainties are assumed to be uncorrelated
         # (which is not exactly true in rotated images)
         self.W = 1. / (self.err * self.err)
-        self.W = self.W.flatten()  # np.diag(self.W.flatten())
-        self.W_dot_data = self.W * self.data.flatten()
 
     def simulate(self, *psf_params):
         """
@@ -759,7 +883,7 @@ class PSFFitWorkspace(FitWorkspace):
             :hide:
 
             >>> assert mod is not None
-            >>> assert np.mean(np.abs(mod-data)/data_errors) < 1
+            >>> assert np.mean(np.abs(mod.reshape(data.shape)-data)/data_errors) < 1
 
         Fit the data in 1D:
 
@@ -801,15 +925,15 @@ class PSFFitWorkspace(FitWorkspace):
         #     M = self.psf.evaluate(self.pixels, p=np.array([1] + list(self.p))).flatten()
         #     M_dot_W_dot_M = M.T @ self.W @ M
         #     # Regression
-        #     amplitude = M.T @ self.W_dot_data / M_dot_W_dot_M
+        #     amplitude = M.T @ (self.W * self.data) / M_dot_W_dot_M
         #     self.p[0] = amplitude
         # Save results
-        self.model = self.psf.evaluate(self.pixels, p=self.p)
+        self.model = self.psf.evaluate(self.pixels, p=self.p).flatten()
         self.model_err = np.zeros_like(self.model)
         return self.pixels, self.model, self.model_err
 
     def plot_fit(self):
-        if self.data.ndim == 1:
+        if self.Nx == 1:
             fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex='all', gridspec_kw={'height_ratios': [5, 1]})
             data = np.copy(self.data)
             if self.bgd_model_func is not None:
@@ -861,19 +985,22 @@ class PSFFitWorkspace(FitWorkspace):
             ax[1].get_yaxis().set_label_coords(-0.1, 0.5)
             # fig.tight_layout()
             # fig.subplots_adjust(wspace=0, hspace=0)
-        elif self.data.ndim == 2:
+        else:
+            data = np.copy(self.data).reshape((self.Ny, self.Nx))
+            model = np.copy(self.model).reshape((self.Ny, self.Nx))
+            err = np.copy(self.err).reshape((self.Ny, self.Nx))
             gs_kw = dict(width_ratios=[3, 0.15], height_ratios=[1, 1, 1, 1])
             fig, ax = plt.subplots(nrows=4, ncols=2, figsize=(5, 7), gridspec_kw=gs_kw)
             norm = np.nanmax(self.data)
-            plot_image_simple(ax[0, 0], data=self.model / norm, aspect='auto', cax=ax[0, 1], vmin=0, vmax=1,
+            plot_image_simple(ax[0, 0], data=model / norm, aspect='auto', cax=ax[0, 1], vmin=0, vmax=1,
                               units='1/max(data)')
             ax[0, 0].set_title("Model", fontsize=10, loc='center', color='white', y=0.8)
-            plot_image_simple(ax[1, 0], data=self.data / norm, title='Data', aspect='auto',
+            plot_image_simple(ax[1, 0], data=data / norm, title='Data', aspect='auto',
                               cax=ax[1, 1], vmin=0, vmax=1, units='1/max(data)')
             ax[1, 0].set_title('Data', fontsize=10, loc='center', color='white', y=0.8)
-            residuals = (self.data - self.model)
+            residuals = (data - model)
             # residuals_err = self.spectrum.spectrogram_err / self.model
-            norm = self.err
+            norm = err
             residuals /= norm
             std = float(np.std(residuals))
             plot_image_simple(ax[2, 0], data=residuals, vmin=-5 * std, vmax=5 * std, title='(Data-Model)/Err',
@@ -887,14 +1014,12 @@ class PSFFitWorkspace(FitWorkspace):
             ax[1, 1].get_yaxis().set_label_coords(3.5, 0.5)
             ax[2, 1].get_yaxis().set_label_coords(3.5, 0.5)
             ax[3, 1].remove()
-            ax[3, 0].plot(np.arange(self.Nx), self.data.sum(axis=0), label='Data')
-            ax[3, 0].plot(np.arange(self.Nx), self.model.sum(axis=0), label='Model')
+            ax[3, 0].plot(np.arange(self.Nx), data.sum(axis=0), label='Data')
+            ax[3, 0].plot(np.arange(self.Nx), model.sum(axis=0), label='Model')
             ax[3, 0].set_ylabel('Transverse sum')
             ax[3, 0].set_xlabel(r'X [pixels]')
             ax[3, 0].legend(fontsize=7)
             ax[3, 0].grid(True)
-        else:
-            raise ValueError(f"Data array must have dimension 1 or 2. Here data.ndim={self.data.ndim}.")
         if self.live_fit:  # pragma: no cover
             plt.draw()
             plt.pause(1e-8)
@@ -912,13 +1037,15 @@ class PSFFitWorkspace(FitWorkspace):
             parameters.PdfPages.savefig()
 
 
-def load_PSF(psf_type=parameters.PSF_TYPE):
+def load_PSF(psf_type=parameters.PSF_TYPE, target=None):
     """Load the PSF model with a keyword.
 
     Parameters
     ----------
     psf_type: str
-        PSF model keyword.
+        PSF model keyword (default: parameters.PSF_TYPE).
+    target: Target, optional
+        The Target instance to make Order0 PSF model (default: None).
 
     Returns
     -------
@@ -932,14 +1059,16 @@ def load_PSF(psf_type=parameters.PSF_TYPE):
     <....Moffat object at ...>
     >>> load_PSF(psf_type="MoffatGauss")  # doctest: +ELLIPSIS
     <....MoffatGauss object at ...>
-    >>> load_PSF(psf_type="unknown")  # doctest: +ELLIPSIS
-    <....PSF object at ...>
 
     """
     if psf_type == "Moffat":
         psf = Moffat()
     elif psf_type == "MoffatGauss":
         psf = MoffatGauss()
+    elif psf_type == "Order0":
+        if target is None:
+            raise ValueError(f"A Target instance must be given when PSF_TYPE='Order0'. I got target={target}.")
+        psf = Order0(target=target)
     else:
         raise ValueError(f"Unknown PSF_TYPE={psf_type}. Must be either Moffat or MoffatGauss.")
     return psf
