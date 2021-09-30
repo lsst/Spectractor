@@ -23,3 +23,6 @@ docs/_build
 *.bak
 *.backup
 *.h5
+config.log
+.scon*
+python/lsst/obs/lsst/version.py
