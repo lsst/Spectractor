@@ -26,3 +26,4 @@ docs/_build
 config.log
 .scon*
 python/lsst/obs/lsst/version.py
+tests/.tests/
