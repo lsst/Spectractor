@@ -22,7 +22,7 @@ docs/_build
 *.bak
 *.backup
 *.h5
-python/version.py
+spectractor/version.py
 .sconsign.dblite
 config.log
 tests/.tests/
