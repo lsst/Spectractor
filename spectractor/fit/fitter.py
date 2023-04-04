@@ -14,6 +14,7 @@ from spectractor import parameters
 from spectractor.config import set_logger
 from spectractor.tools import formatting_numbers, compute_correlation_matrix, plot_correlation_matrix_simple
 from spectractor.fit.statistics import Likelihood
+from lsst.utils.threads import threadpool_limits
 
 
 class FitWorkspace:
@@ -543,46 +544,46 @@ class FitWorkspace:
             A header to add to the file (default: "").
         """
         output_filename = os.path.splitext(self.filename)[0] + "_bestfit.txt"
-        
+
         #print(">>>>> \t fitter.py :: save_parameters_summary ::  output_filename = ",  output_filename)
-        
+
         f = open(output_filename, 'w')
         txt = self.filename + "\n"
         if header != "":
             txt += header + "\n"
-            
+
         #print(">>>>> \t save_parameters_summary :: cov = ",self.cov, " type = ",type(self.cov), " shape = ",self.cov.shape)
-        
+
         mycov = np.copy(self.cov)
         maxk = np.min(mycov.shape)
-        
+
         for k, ip in enumerate(ipar):
             #print(">>>> \t \t  k = ", k)
-            
+
             if k < maxk:
-                
+
                 covariance_matrix_element = mycov[k, k]
-                #print(">>>>> \t save_parameters_summary ::  k = ", k , 
-                #      " ,  ip = ", ip , 
+                #print(">>>>> \t save_parameters_summary ::  k = ", k ,
+                #      " ,  ip = ", ip ,
                 #      " p[ip] = " , self.p[ip],
-                #      " , label = ", self.input_labels[ip] , 
+                #      " , label = ", self.input_labels[ip] ,
                 #      " , cov = ",covariance_matrix_element)
-            
+
                 if covariance_matrix_element >= 0:
                     covariance_matrix_element_sigma = np.sqrt(covariance_matrix_element)
                 else:
                     #print(">>>>> \t save_parameters_summary ::  k = ", k , " ,  ip = ", ip , " , label = ", self.input_labels[ip] , " , Negative cov = ",covariance_matrix_element)
                     covariance_matrix_element_sigma = np.sqrt(-covariance_matrix_element)
-                
+
                 txt += "%s: %s +%s - %s\n" % formatting_numbers(self.p[ip], covariance_matrix_element_sigma,
                                                                covariance_matrix_element_sigma,
                                                                label=self.input_labels[ip])
             else:
                 #print(">>>>> \t save_parameters_summary ::  SKIP k = ", k , ' >=  kmax = ',maxk)
                 pass
-                
-                
-            
+
+
+
             #txt += "%s: %s +%s - %s\n" % formatting_numbers(self.p[ip], np.sqrt(self.cov[k, k]),
             #                                               np.sqrt(self.cov[k, k]),
             #                                               label=self.input_labels[ip])
@@ -726,38 +727,39 @@ class FitWorkspace:
 
         """
         # check data format
-        if (self.data.dtype != object and self.data.ndim > 1) or (self.err.dtype != object and self.err.ndim > 1):
-            raise ValueError("Fitworkspace.data and Fitworkspace.err must be a flat 1D array,"
-                             " or an array of flat arrays of unequal lengths.")
-        # prepare weight matrices in case they have not been built before
-        self.prepare_weight_matrices()
-        x, model, model_err = self.simulate(*p)
-        W = self.compute_W_with_model_error(model_err)
-        if W.ndim == 1 and W.dtype != object:
-            res = (model - self.data)
-            chisq = res @ (W * res)
-        elif W.dtype == object:
-            K = len(W)
-            res = [model[k] - self.data[k] for k in range(K)]
-            if W[0].ndim == 1:
-                chisq = np.sum([res[k] @ (W[k] * res[k]) for k in range(K)])
-            elif W[0].ndim == 2:
-                chisq = np.sum([res[k] @ W[k] @ res[k] for k in range(K)])
+        with threadpool_limits(limits=1):  # methods in here thread-thrash if not limited
+            if (self.data.dtype != object and self.data.ndim > 1) or (self.err.dtype != object and self.err.ndim > 1):
+                raise ValueError("Fitworkspace.data and Fitworkspace.err must be a flat 1D array,"
+                                " or an array of flat arrays of unequal lengths.")
+            # prepare weight matrices in case they have not been built before
+            self.prepare_weight_matrices()
+            x, model, model_err = self.simulate(*p)
+            W = self.compute_W_with_model_error(model_err)
+            if W.ndim == 1 and W.dtype != object:
+                res = (model - self.data)
+                chisq = res @ (W * res)
+            elif W.dtype == object:
+                K = len(W)
+                res = [model[k] - self.data[k] for k in range(K)]
+                if W[0].ndim == 1:
+                    chisq = np.sum([res[k] @ (W[k] * res[k]) for k in range(K)])
+                elif W[0].ndim == 2:
+                    chisq = np.sum([res[k] @ W[k] @ res[k] for k in range(K)])
+                else:
+                    raise ValueError(f"First element of fitworkspace.W has no ndim attribute or has a dimension above 2. "
+                                    f"I get W[0]={W[0]}")
+            elif W.ndim == 2 and W.dtype != object:
+                res = (model - self.data)
+                chisq = res @ W @ res
             else:
-                raise ValueError(f"First element of fitworkspace.W has no ndim attribute or has a dimension above 2. "
-                                 f"I get W[0]={W[0]}")
-        elif W.ndim == 2 and W.dtype != object:
-            res = (model - self.data)
-            chisq = res @ W @ res
-        else:
-            raise ValueError(
-                f"Data inverse covariance matrix must be a np.ndarray of dimension 1 or 2,"
-                f"either made of 1D or 2D arrays of equal lengths or not for block diagonal matrices."
-                f"\nHere W type is {type(W)}, shape is {W.shape} and W is {W}.")
-        if model_output:
-            return chisq, x, model, model_err
-        else:
-            return chisq
+                raise ValueError(
+                    f"Data inverse covariance matrix must be a np.ndarray of dimension 1 or 2,"
+                    f"either made of 1D or 2D arrays of equal lengths or not for block diagonal matrices."
+                    f"\nHere W type is {type(W)}, shape is {W.shape} and W is {W}.")
+            if model_output:
+                return chisq, x, model, model_err
+            else:
+                return chisq
 
     def prepare_weight_matrices(self):
         # Prepare covariance matrix for data
