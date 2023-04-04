@@ -1,4 +1,5 @@
 from numpy.testing import run_module_suite
+from lsst.utils.threads import threadpool_limits
 import sys
 
 # from test_astrometry import *
@@ -15,4 +16,5 @@ if __name__ == "__main__":
         print("Running tests that are not tagged as 'slow'. "
               "Use '--all' to run all tests.")
         args.append("-a!slow")
-    run_module_suite(argv=args)
+    with threadpool_limits(limits=1):
+        run_module_suite(argv=args)
