@@ -1047,7 +1047,9 @@ def gradient_descent(fit_workspace, params, epsilon, niter=10, fixed_params=None
                 return fit_workspace.chisq(tmp_params_2)
 
             # tol parameter acts on alpha (not func)
-            alpha_min, fval, iter, funcalls = optimize.brent(line_search, full_output=True, tol=5e-1, brack=(0, 1))
+            with threadpool_limits(limits=1):
+                alpha_min, fval, iter, funcalls = optimize.brent(line_search, full_output=True, tol=5e-1,
+                                                                 brack=(0, 1))
         else:
             alpha_min = 1
             fval = np.copy(cost)
@@ -1333,8 +1335,9 @@ def run_minimisation(fit_workspace, method="newton", epsilon=None, fix=None, xto
 
     if method == "minimize":
         start = time.time()
-        result = optimize.minimize(nll, fit_workspace.p, method=minimizer_method,
-                                   options={'ftol': ftol, 'maxiter': 100000}, bounds=bounds)
+        with threadpool_limits(limits=1):
+            result = optimize.minimize(nll, fit_workspace.p, method=minimizer_method,
+                                    options={'ftol': ftol, 'maxiter': 100000}, bounds=bounds)
         fit_workspace.p = result['x']
         if verbose:
             my_logger.debug(f"\n\t{result}")
@@ -1344,7 +1347,8 @@ def run_minimisation(fit_workspace, method="newton", epsilon=None, fix=None, xto
     elif method == 'basinhopping':
         start = time.time()
         minimizer_kwargs = dict(method=minimizer_method, bounds=bounds)
-        result = optimize.basinhopping(nll, guess, minimizer_kwargs=minimizer_kwargs)
+        with threadpool_limits(limits=1):
+            result = optimize.basinhopping(nll, guess, minimizer_kwargs=minimizer_kwargs)
         fit_workspace.p = result['x']
         if verbose:
             my_logger.debug(f"\n\t{result}")
@@ -1357,8 +1361,9 @@ def run_minimisation(fit_workspace, method="newton", epsilon=None, fix=None, xto
         start = time.time()
         x_scale = np.abs(guess)
         x_scale[x_scale == 0] = 0.1
-        p = optimize.least_squares(fit_workspace.weighted_residuals, guess, verbose=2, ftol=1e-6, x_scale=x_scale,
-                                   diff_step=0.001, bounds=bounds.T)
+        with threadpool_limits(limits=1):
+            p = optimize.least_squares(fit_workspace.weighted_residuals, guess, verbose=2, ftol=1e-6,
+                                       x_scale=x_scale, diff_step=0.001, bounds=bounds.T)
         fit_workspace.p = p.x  # m.np_values()
         if verbose:
             my_logger.debug(f"\n\t{p}")
