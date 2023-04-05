@@ -10,7 +10,7 @@ from spectractor.simulation.simulator import (SpectrumSimulatorSimGrid, Spectrum
 from spectractor.config import load_config  # noqa: E402
 import os  # noqa: E402
 import unittest  # noqa: E402
-from lsst.utils.threads import threadpool_limits  # noqa: E402
+from threadpoolctl import threadpool_limits  # noqa: E402
 
 
 # TODO: DM-33441 Fix broken spectractor tests

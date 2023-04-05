@@ -1,5 +1,5 @@
 from numpy.testing import run_module_suite
-from lsst.utils.threads import threadpool_limits
+from threadpoolctl import threadpool_limits
 import sys
 
 from test_simulator import *

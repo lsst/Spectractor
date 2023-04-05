@@ -14,7 +14,7 @@ from spectractor import parameters
 from spectractor.config import set_logger
 from spectractor.tools import formatting_numbers, compute_correlation_matrix, plot_correlation_matrix_simple
 from spectractor.fit.statistics import Likelihood
-from lsst.utils.threads import threadpool_limits
+from threadpoolctl import threadpool_limits
 
 
 class FitWorkspace:
@@ -756,10 +756,10 @@ class FitWorkspace:
                     f"Data inverse covariance matrix must be a np.ndarray of dimension 1 or 2,"
                     f"either made of 1D or 2D arrays of equal lengths or not for block diagonal matrices."
                     f"\nHere W type is {type(W)}, shape is {W.shape} and W is {W}.")
-            if model_output:
-                return chisq, x, model, model_err
-            else:
-                return chisq
+        if model_output:
+            return chisq, x, model, model_err
+        else:
+            return chisq
 
     def prepare_weight_matrices(self):
         # Prepare covariance matrix for data
