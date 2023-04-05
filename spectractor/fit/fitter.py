@@ -1381,14 +1381,15 @@ def run_minimisation(fit_workspace, method="newton", epsilon=None, fix=None, xto
             fix = [False] * guess.size
         # noinspection PyArgumentList
         # m = Minuit(fcn=nll, values=guess, error=error, errordef=1, fix=fix, print_level=verbose, limit=bounds)
-        m = Minuit(nll, np.copy(guess))
-        m.errors = error
-        m.errordef = 1
-        m.fixed = fix
-        m.print_level = verbose
-        m.limits = bounds
-        m.tol = 10
-        m.migrad()
+        with threadpool_limits(limits=1):
+            m = Minuit(nll, np.copy(guess))
+            m.errors = error
+            m.errordef = 1
+            m.fixed = fix
+            m.print_level = verbose
+            m.limits = bounds
+            m.tol = 10
+            m.migrad()
         fit_workspace.p = np.array(m.values[:])
         if verbose:
             my_logger.debug(f"\n\t{m}")
