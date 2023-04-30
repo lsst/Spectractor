@@ -11,6 +11,7 @@ from spectractor import parameters  # noqa: E402
 import os  # noqa: E402
 import sys  # noqa: E402
 import unittest  # noqa: E402
+from threadpoolctl import threadpool_limits  # noqa: E402
 
 
 class LineFitWorkspace(FitWorkspace):
@@ -135,4 +136,5 @@ def test_minimisation_sigma_clipping(seed=42):
 
 
 if __name__ == "__main__":
-    run_module_suite()
+    with threadpool_limits(limits=1):
+        run_module_suite()

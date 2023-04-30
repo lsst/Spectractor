@@ -13,6 +13,7 @@ import os  # noqa: E402
 import subprocess  # noqa: E402
 import numpy as np  # noqa: E402
 import unittest  # noqa: E402
+from threadpoolctl import threadpool_limits  # noqa: E402
 
 
 # TODO: DM-33441 Fix broken spectractor tests
@@ -70,4 +71,5 @@ def test_astrometry():
 
 
 if __name__ == "__main__":
-    run_module_suite()
+    with threadpool_limits(limits=1):
+        run_module_suite()

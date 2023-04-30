@@ -10,6 +10,7 @@ import os
 import random
 import string
 import astropy
+from threadpoolctl import threadpool_limits
 
 from spectractor import parameters
 from spectractor.config import set_logger, load_config, update_derived_parameters, apply_rebinning_to_parameters
@@ -1842,13 +1843,14 @@ def calibrate_spectrum(spectrum, with_adr=False, niter=5):
     #                    bounds=((D - 5 * parameters.DISTANCE2CCD_ERR, D + 5 * parameters.DISTANCE2CCD_ERR), (-2, 2)))
     error = [parameters.DISTANCE2CCD_ERR, pixel_shift_step]
     fix = [False, False]
-    m = Minuit(shift_minimizer, start)
-    m.errors = error
-    m.errordef = 1
-    m.fixed = fix
-    m.print_level = 0
-    m.limits = ((D - 5 * parameters.DISTANCE2CCD_ERR, D + 5 * parameters.DISTANCE2CCD_ERR), (-2, 2))
-    m.migrad()
+    with threadpool_limits(limits=1):
+        m = Minuit(shift_minimizer, start)
+        m.errors = error
+        m.errordef = 1
+        m.fixed = fix
+        m.print_level = 0
+        m.limits = ((D - 5 * parameters.DISTANCE2CCD_ERR, D + 5 * parameters.DISTANCE2CCD_ERR), (-2, 2))
+        m.migrad()
     # if parameters.DEBUG:
     #     print(m.prin)
     # if not res.success:

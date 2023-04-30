@@ -26,6 +26,7 @@ from skimage.feature import hessian_matrix
 from spectractor.config import set_logger
 from spectractor import parameters
 from math import floor
+from threadpoolctl import threadpool_limits
 
 from numba import njit
 
@@ -152,8 +153,10 @@ def fit_gauss(x, y, guess=[10, 1000, 1], bounds=(-np.inf, np.inf), sigma=None):
     """
     def gauss_jacobian_wrapper(*params):
         return np.array(gauss_jacobian(*params)).T
-    popt, pcov = curve_fit(gauss, x, y, p0=guess, bounds=bounds, tr_solver='exact', jac=gauss_jacobian_wrapper,
-                           sigma=sigma, method='dogbox', verbose=0, xtol=1e-15, ftol=1e-15)
+    with threadpool_limits(limits=1):
+        popt, pcov = curve_fit(gauss, x, y, p0=guess, bounds=bounds, tr_solver='exact',
+                               jac=gauss_jacobian_wrapper, sigma=sigma, method='dogbox',
+                               verbose=0, xtol=1e-15, ftol=1e-15)
     return popt, pcov
 
 
@@ -227,7 +230,9 @@ def fit_multigauss_and_line(x, y, guess=[0, 1, 10, 1000, 1, 0], bounds=(-np.inf,
     [  1.  10.  20. 650.   3.  40. 750.  10.]
     """
     maxfev = 1000
-    popt, pcov = curve_fit(multigauss_and_line, x, y, p0=guess, bounds=bounds, maxfev=maxfev, absolute_sigma=True)
+    with threadpool_limits(limits=1):
+        popt, pcov = curve_fit(multigauss_and_line, x, y, p0=guess, bounds=bounds, maxfev=maxfev,
+                               absolute_sigma=True)
     return popt, pcov
 
 
@@ -409,9 +414,10 @@ def fit_multigauss_and_bgd(x, y, guess=[0, 1, 10, 1000, 1, 0], bounds=(-np.inf, 
         plt.show()
     """
     maxfev = 10000
-    popt, pcov = curve_fit(multigauss_and_bgd, x, y, p0=guess, bounds=bounds, maxfev=maxfev, sigma=sigma,
-                           absolute_sigma=True, method='trf', xtol=1e-4, ftol=1e-4, verbose=0,
-                           jac=multigauss_and_bgd_jacobian, x_scale='jac')
+    with threadpool_limits(limits=1):
+        popt, pcov = curve_fit(multigauss_and_bgd, x, y, p0=guess, bounds=bounds, maxfev=maxfev, sigma=sigma,
+                            absolute_sigma=True, method='trf', xtol=1e-4, ftol=1e-4, verbose=0,
+                            jac=multigauss_and_bgd_jacobian, x_scale='jac')
     # error = 0.1 * np.abs(guess) * np.ones_like(guess)
     # z = np.where(np.isclose(error,0.0,1e-6))
     # error[z] = 0.01
