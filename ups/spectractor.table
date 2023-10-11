@@ -1,1 +1,3 @@
 envPrepend(PYTHONPATH, ${PRODUCT_DIR}/lib/python)
+
+setupRequired(utils)
