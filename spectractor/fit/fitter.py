@@ -1464,7 +1464,8 @@ def simple_newton_minimisation(fit_workspace, epsilon, niter=10, xtol=1e-3, ftol
         plt.plot(r, js, label="J")
         plt.grid()
         plt.legend()
-        plt.show()
+        if parameters.DISPLAY:
+            plt.show()
 
         if parameters.DISPLAY:
             fig = plt.figure()
