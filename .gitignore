@@ -28,4 +28,4 @@ config.log
 tests/.tests/
 *__pycache__/
 _build.*
-tests/data/cache
+
