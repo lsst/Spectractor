@@ -1,3 +1,5 @@
+import importlib.metadata
+import packaging.version
 from astropy.coordinates import SkyCoord, Distance
 import astropy.units as u
 from astropy.time import Time
@@ -13,6 +15,13 @@ from spectractor.extractor.spectroscopy import (Lines, HGAR_LINES, HYDROGEN_LINE
                                                 ISM_LINES, STELLAR_LINES)
 
 from getCalspec import getCalspec
+
+# Astroquery versions change the Simbad API.
+_astroquery_version = packaging.version.parse(importlib.metadata.version("astroquery"))
+if _astroquery_version < packaging.version.parse("0.4.8"):
+    _USE_NEW_SIMBAD = False
+else:
+    _USE_NEW_SIMBAD = True
 
 
 def load_target(label, verbose=False):
@@ -259,8 +268,20 @@ class Star(Target):
         simbadQuerier = SimbadClass()
         patchSimbadURL(simbadQuerier)
 
-        simbadQuerier.add_votable_fields('flux(U)', 'flux(B)', 'flux(V)', 'flux(R)', 'flux(I)', 'flux(J)', 'sptype',
-                                         'parallax', 'pm', 'z_value')
+        if _USE_NEW_SIMBAD:
+            simbadQuerier.add_votable_fields('U', 'B', 'V', 'R', 'I', 'J', 'sp_type',
+                                             'parallax', 'propermotions', 'rvz_redshift')
+            ra_key = "ra"
+            dec_key = "dec"
+            redshift_key = "rvz_redshift"
+        else:
+            simbadQuerier.add_votable_fields(
+                'flux(U)', 'flux(B)', 'flux(V)', 'flux(R)', 'flux(I)', 'flux(J)', 'sptype',
+                'parallax', 'pm', 'z_value'
+            )
+            ra_key = "RA"
+            dec_key = "DEC"
+            redshift_key = "Z_VALUE"
         if not getCalspec.is_calspec(self.label) and getCalspec.is_calspec(self.label.replace(".", " ")):
             self.label = self.label.replace(".", " ")
         astroquery_label = self.label
@@ -272,12 +293,17 @@ class Star(Target):
         if self.simbad_table is not None:
             if self.verbose or True:
                 self.my_logger.info(f'\n\tSimbad:\n{self.simbad_table}')
-            self.radec_position = SkyCoord(self.simbad_table['RA'][0] + ' ' + self.simbad_table['DEC'][0], unit=(u.hourangle, u.deg))
+            if _USE_NEW_SIMBAD:
+                self.radec_position = SkyCoord(self.simbad_table[ra_key][0], self.simbad_table[dec_key][0], unit="deg")
+            else:
+                self.radec_position = SkyCoord(
+                    self.simbad_table[ra_key][0] + ' ' + self.simbad_table[dec_key][0], unit=(u.hourangle, u.deg)
+                )
         else:
             raise RuntimeError(f"Target {self.label} not found in Simbad")
         self.get_radec_position_after_pm(date_obs="J2000")
-        if not np.ma.is_masked(self.simbad_table['Z_VALUE']):
-            self.redshift = float(self.simbad_table['Z_VALUE'])
+        if not np.ma.is_masked(self.simbad_table[redshift_key]):
+            self.redshift = float(self.simbad_table[redshift_key])
         else:
             self.redshift = 0
         self.load_spectra()
@@ -379,13 +405,21 @@ class Star(Target):
 
     def get_radec_position_after_pm(self, date_obs):
         if self.simbad_table is not None:
-            target_pmra = self.simbad_table[0]['PMRA'] * u.mas / u.yr
+            if _USE_NEW_SIMBAD:
+                pmra_key = 'pmra'
+                pmdec_key = 'pmdec'
+                plx_value_key = 'plx_value'
+            else:
+                pmra_key = 'PMRA'
+                pmdec_key = 'PMDEC'
+                plx_value_key = 'PLX_VALUE'
+            target_pmra = self.simbad_table[0][pmra_key] * u.mas / u.yr
             if np.isnan(target_pmra):
                 target_pmra = 0 * u.mas / u.yr
-            target_pmdec = self.simbad_table[0]['PMDEC'] * u.mas / u.yr
+            target_pmdec = self.simbad_table[0][pmdec_key] * u.mas / u.yr
             if np.isnan(target_pmdec):
                 target_pmdec = 0 * u.mas / u.yr
-            target_parallax = self.simbad_table[0]['PLX_VALUE'] * u.mas
+            target_parallax = self.simbad_table[0][plx_value_key] * u.mas
             if target_parallax == 0 * u.mas:
                 target_parallax = 1e-4 * u.mas
             target_coord = SkyCoord(ra=self.radec_position.ra, dec=self.radec_position.dec,
