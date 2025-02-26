@@ -956,8 +956,9 @@ def run_emcee(mcmc_fit_workspace, ln=lnprob):
             sampler.run_mcmc(p0, nsteps=max(0, nsamples - backend.iteration), progress=True)
         pool.close()
     except ValueError:
+        nthread = int(os.environ.get("OMP_NUM_THREADS", multiprocessing.cpu_count()))
         sampler = emcee.EnsembleSampler(mcmc_fit_workspace.nwalkers, mcmc_fit_workspace.params.ndim, ln, args=(),
-                                        threads=multiprocessing.cpu_count(), backend=backend)
+                                        threads=nthread, backend=backend)
         my_logger.info(f"\n\tInitial size: {backend.iteration}")
         if backend.iteration > 0:
             p0 = sampler.get_last_sample()
