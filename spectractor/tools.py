@@ -682,6 +682,7 @@ def fit_poly2d(x, y, z, order):
     """
     p_init = models.Polynomial2D(degree=order)
     fit_p = fitting.LevMarLSQFitter()
+    # This is a dummy commit
     with warnings.catch_warnings():
         # Ignore model linearity warning from the fitter
         warnings.simplefilter('ignore')
