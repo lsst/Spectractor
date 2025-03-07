@@ -288,6 +288,7 @@ class Star(Target):
         if getCalspec.is_calspec(self.label):
             calspec = getCalspec.Calspec(self.label)
             astroquery_label = calspec.Astroquery_Name
+        self.my_logger.info("Querying SIMBAD for %s", astroquery_label)
         self.simbad_table = simbadQuerier.query_object(astroquery_label)
 
         if self.simbad_table is not None:
