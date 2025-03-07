@@ -428,7 +428,7 @@ class Likelihood(Grid):
 
     def triangle_plots(self, output_filename=''):
         n = self.dim
-        fig = plt.figure(1, figsize=(16, 9))
+        fig = plt.figure(figsize=(16, 9))
         if parameters.PAPER:
             fig.set_size_inches(18, 13)
         fig.clf()
