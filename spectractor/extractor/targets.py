@@ -292,7 +292,7 @@ class Star(Target):
             import astropy.table
 
             self.my_logger.info("Using cached SIMBAD query for ``%s``", astroquery_label)
-            self.simbad_table = astropy.table.Table.read(parameters.HD111980_OFFLINE_FILE, format="ecsv")
+            self.simbad_table = astropy.table.Table.read(parameters.HD111980_OFFLINE_FILE, format="ascii.ecsv")
         else:
             self.my_logger.info("Querying SIMBAD for ``%s``", astroquery_label)
             self.simbad_table = simbadQuerier.query_object(astroquery_label)
