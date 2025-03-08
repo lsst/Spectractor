@@ -106,6 +106,14 @@ def test_ctio_fullchain():
     parameters.SPECTRACTOR_ATMOSPHERE_SIM = "libradtran"
     sim_image = "./tests/data/sim_20170530_134.fits"
 
+    parameters.HD111980_OFFLINE_FILE = ""
+    if os.environ.get("JENKINS_HOME") is not None:
+        parameters.HD111980_OFFLINE_FILE = os.path.join(
+            os.path.abspath(os.path.dirname(__file__)),
+            "data",
+            "hd111980_simbad.ecsv",
+        )
+
     # load test and make image simulation
     if not os.path.isfile(sim_image):
         make_image()

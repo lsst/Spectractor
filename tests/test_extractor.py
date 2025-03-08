@@ -37,6 +37,14 @@ def test_extractor_ctio():
     parameters.CCD_REBIN = 2  # rebin=1 to build tests/data spectrum
     apply_rebinning_to_parameters()
 
+    parameters.HD111980_OFFLINE_FILE = ""
+    if os.environ.get("JENKINS_HOME") is not None:
+        parameters.HD111980_OFFLINE_FILE = os.path.join(
+            os.path.abspath(os.path.dirname(__file__)),
+            "data",
+            "hd111980_simbad.ecsv",
+        )
+
     for file_name in file_names:
         tag = file_name.split('/')[-1].replace("sim", "reduc")
         disperser_label, target_label, xpos, ypos = logbook.search_for_image(tag)
