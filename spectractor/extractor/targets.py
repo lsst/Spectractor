@@ -287,7 +287,7 @@ class Star(Target):
         cache_file = self._get_cache_file(astroquery_label)
         if f"{cache_file}.pickle" in os.listdir(cache_location):
             with open(os.path.join(cache_location, f"{cache_file}.pickle"), "rb") as f:
-                self.radec_position, self.redshift = pickle.load(f)
+                self.radec_position, self.redshift, self.simbad_table = pickle.load(f)
 
         else:
             simbadQuerier = SimbadClass()
@@ -326,7 +326,7 @@ class Star(Target):
             else:
                 self.redshift = 0
             with open(os.path.join(cache_location, f"{cache_file}.pickle"), "wb") as f:
-                pickle.dump((self.radec_position, self.redshift), f)
+                pickle.dump((self.radec_position, self.redshift, self.simbad_table), f)
         self.get_radec_position_after_pm(date_obs="J2000")
         self.load_spectra()
 
