@@ -25,6 +25,19 @@ if _astroquery_version < packaging.version.parse("0.4.8"):
 else:
     _USE_NEW_SIMBAD = True
 
+def _get_cache_dir():
+    cache = os.path.join(os.path.dirname(__file__), ".cache/astroquery")
+    os.makedirs(cache, exist_ok=True)
+    return cache
+
+def _get_cache_file(tag):
+    filename = tag.replace("*", "").replace(" ", "_").replace(".", "_")
+    return filename
+
+def _clean_cache_dir():
+    cache = os.path.join(os.path.dirname(__file__), ".cache/astroquery")
+    os.rmdir(cache)
+
 
 def load_target(label, verbose=False):
     """Load the target properties according to the type set by parameters.OBS_OBJECT_TYPE.
@@ -243,15 +256,6 @@ class Star(Target):
         self.my_logger = set_logger(self.__class__.__name__)
         self.simbad_table = None
         self.load()
-
-    def _get_cache_dir(self):
-        cache = os.path.join(os.path.dirname(__file__), ".cache/astroquery")
-        os.makedirs(cache, exist_ok=True)
-        return cache
-
-    def _get_cache_file(self, tag):
-        filename = tag.replace("*", "").replace(" ", "_").replace(".", "_")
-        return filename
 
     def load(self):
         """Load the coordinates of the target.
