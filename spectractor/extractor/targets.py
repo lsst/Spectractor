@@ -293,7 +293,7 @@ class Star(Target):
         cache_location = _get_cache_dir()
         cache_file = _get_cache_file(astroquery_label)
         if f"{cache_file}.pickle" in os.listdir(cache_location):
-            self.my_logger.warning(f"Load {self.label} coordinates from cached file {cache_file}.pickle")
+            self.my_logger.debug(f"\n\tLoad {self.label} coordinates from cached file {cache_file}.pickle")
             with open(os.path.join(cache_location, f"{cache_file}.pickle"), "rb") as f:
                 self.radec_position, self.redshift, self.simbad_table = pickle.load(f)
 
@@ -317,7 +317,7 @@ class Star(Target):
                 redshift_key = "Z_VALUE"
 
             self.simbad_table = simbadQuerier.query_object(astroquery_label)
-            self.my_logger.warning(f"Download {self.label} coordinates from Simbad:\n{self.simbad_table}")
+            self.my_logger.debug(f"\n\tDownload {self.label} coordinates from Simbad:\n{self.simbad_table}")
 
             if self.simbad_table is not None:
                 if self.verbose or True:
