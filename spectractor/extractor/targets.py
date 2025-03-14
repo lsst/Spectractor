@@ -434,7 +434,7 @@ class Star(Target):
 
     def get_radec_position_after_pm(self, date_obs):
         if self.simbad_table is not None:
-            if _USE_NEW_SIMBAD:
+            if _USE_NEW_SIMBAD or "pmra" in self.simbad_table[0].keys():
                 pmra_key = 'pmra'
                 pmdec_key = 'pmdec'
                 plx_value_key = 'plx_value'
