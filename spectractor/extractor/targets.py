@@ -25,14 +25,17 @@ if _astroquery_version < packaging.version.parse("0.4.8"):
 else:
     _USE_NEW_SIMBAD = True
 
+
 def _get_cache_dir():
     cache = os.path.join(os.path.dirname(__file__), ".cache/astroquery")
     os.makedirs(cache, exist_ok=True)
     return cache
 
+
 def _get_cache_file(tag):
     filename = tag.replace("*", "").replace(" ", "_").replace(".", "_")
     return filename
+
 
 def _clean_cache_dir():
     cache = os.path.join(os.path.dirname(__file__), ".cache/astroquery")
@@ -287,8 +290,8 @@ class Star(Target):
             calspec = getCalspec.Calspec(self.label)
             astroquery_label = calspec.Astroquery_Name
 
-        cache_location = self._get_cache_dir()
-        cache_file = self._get_cache_file(astroquery_label)
+        cache_location = _get_cache_dir()
+        cache_file = _get_cache_file(astroquery_label)
         if f"{cache_file}.pickle" in os.listdir(cache_location):
             with open(os.path.join(cache_location, f"{cache_file}.pickle"), "rb") as f:
                 self.radec_position, self.redshift, self.simbad_table = pickle.load(f)
