@@ -315,7 +315,7 @@ class Star(Target):
             self.simbad_table = simbadQuerier.query_object(astroquery_label)
             self.simbad_table.write(os.path.join(cache_location,f"{cache_file}.ecsv"), overwrite=True)
 
-        if _USE_NEW_SIMBAD:
+        if "ra" in self.simbad_table.keys():
             ra_key = "ra"
             dec_key = "dec"
             redshift_key = "rvz_redshift"
