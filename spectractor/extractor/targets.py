@@ -4,14 +4,12 @@ from astropy.coordinates import SkyCoord, Distance
 import astropy.units as u
 from astropy.time import Time
 from astroquery.simbad import SimbadClass
-import astropy.config
 from astropy.io import ascii
 
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import numpy as np
 import os
-import pickle
 
 from spectractor import parameters
 from spectractor.config import set_logger
