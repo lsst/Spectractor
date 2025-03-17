@@ -5,6 +5,7 @@ import astropy.units as u
 from astropy.time import Time
 from astroquery.simbad import SimbadClass
 import astropy.config
+from astropy.io import ascii
 
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
@@ -295,11 +296,9 @@ class Star(Target):
 
         cache_location = _get_cache_dir()
         cache_file = _get_cache_file(astroquery_label)
-        if f"{cache_file}.pickle" in os.listdir(cache_location):
-            self.my_logger.debug(f"\n\tLoad {self.label} coordinates from cached file {cache_file}.pickle")
-            with open(os.path.join(cache_location, f"{cache_file}.pickle"), "rb") as f:
-                self.radec_position, self.redshift, self.simbad_table = pickle.load(f)
-
+        if f"{cache_file}.ecsv" in os.listdir(cache_location):
+            self.my_logger.debug(f"\n\tLoad {self.label} coordinates from cached file {cache_file}.ecsv")
+            self.simbad_table = ascii.read(os.path.join(cache_location, f"{cache_file}.ecsv"))
         else:
             simbadQuerier = SimbadClass()
             patchSimbadURL(simbadQuerier)
@@ -307,38 +306,38 @@ class Star(Target):
             if _USE_NEW_SIMBAD:
                 simbadQuerier.add_votable_fields('U', 'B', 'V', 'R', 'I', 'J', 'sp_type',
                                                  'parallax', 'propermotions', 'rvz_redshift')
-                ra_key = "ra"
-                dec_key = "dec"
-                redshift_key = "rvz_redshift"
             else:
                 simbadQuerier.add_votable_fields(
                     'flux(U)', 'flux(B)', 'flux(V)', 'flux(R)', 'flux(I)', 'flux(J)', 'sptype',
                     'parallax', 'pm', 'z_value'
                 )
-                ra_key = "RA"
-                dec_key = "DEC"
-                redshift_key = "Z_VALUE"
-
+            self.my_logger.debug(f"\n\tDownload {self.label} coordinates from Simbad:\n{self.simbad_table}...")
             self.simbad_table = simbadQuerier.query_object(astroquery_label)
-            self.my_logger.debug(f"\n\tDownload {self.label} coordinates from Simbad:\n{self.simbad_table}")
+            self.simbad_table.write(os.path.join(cache_location,f"{cache_file}.ecsv"), overwrite=True)
 
-            if self.simbad_table is not None:
-                if self.verbose or True:
-                    self.my_logger.info(f'\n\tSimbad:\n{self.simbad_table}')
-                if _USE_NEW_SIMBAD:
-                    self.radec_position = SkyCoord(self.simbad_table[ra_key][0], self.simbad_table[dec_key][0], unit="deg")
-                else:
-                    self.radec_position = SkyCoord(
-                        self.simbad_table[ra_key][0] + ' ' + self.simbad_table[dec_key][0], unit=(u.hourangle, u.deg)
-                    )
+        if _USE_NEW_SIMBAD:
+            ra_key = "ra"
+            dec_key = "dec"
+            redshift_key = "rvz_redshift"
+        else:
+            ra_key = "RA"
+            dec_key = "DEC"
+            redshift_key = "Z_VALUE"
+        if self.simbad_table is not None:
+            if self.verbose or True:
+                self.my_logger.info(f'\n\tSimbad:\n{self.simbad_table}')
+            if _USE_NEW_SIMBAD:
+                self.radec_position = SkyCoord(self.simbad_table[ra_key][0], self.simbad_table[dec_key][0], unit="deg")
             else:
-                raise RuntimeError(f"Target {self.label} not found in Simbad")
-            if not np.ma.is_masked(self.simbad_table[redshift_key]):
-                self.redshift = float(self.simbad_table[redshift_key])
-            else:
-                self.redshift = 0
-            with open(os.path.join(cache_location, f"{cache_file}.pickle"), "wb") as f:
-                pickle.dump((self.radec_position, self.redshift, self.simbad_table), f)
+                self.radec_position = SkyCoord(
+                    self.simbad_table[ra_key][0] + ' ' + self.simbad_table[dec_key][0], unit=(u.hourangle, u.deg)
+                )
+        else:
+            raise RuntimeError(f"Target {self.label} not found in Simbad")
+        if not np.ma.is_masked(self.simbad_table[redshift_key]):
+            self.redshift = float(self.simbad_table[redshift_key])
+        else:
+            self.redshift = 0
         self.get_radec_position_after_pm(date_obs="J2000")
         self.load_spectra()
 
