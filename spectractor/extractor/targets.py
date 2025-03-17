@@ -4,6 +4,7 @@ from astropy.coordinates import SkyCoord, Distance
 import astropy.units as u
 from astropy.time import Time
 from astroquery.simbad import SimbadClass
+import astropy.config
 
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
@@ -27,7 +28,8 @@ else:
 
 
 def _get_cache_dir():
-    cache = os.path.join(os.path.dirname(__file__), ".cache/astroquery")
+    cache = os.path.join(os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+                         "tests", "data", "cache", "astropy", "astroquery", "Simbad")
     os.makedirs(cache, exist_ok=True)
     return cache
 
@@ -38,7 +40,8 @@ def _get_cache_file(tag):
 
 
 def _clean_cache_dir():
-    cache = os.path.join(os.path.dirname(__file__), ".cache/astroquery")
+    cache = os.path.join(os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+                         "tests", "data", "cache", "astropy", "astroquery", "Simbad")
     os.rmdir(cache)
 
 
