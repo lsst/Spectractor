@@ -309,7 +309,7 @@ class Star(Target):
                     'flux(U)', 'flux(B)', 'flux(V)', 'flux(R)', 'flux(I)', 'flux(J)', 'sptype',
                     'parallax', 'pm', 'z_value'
                 )
-            self.my_logger.debug(f"\n\tDownload {self.label} coordinates from Simbad:\n{self.simbad_table}...")
+            self.my_logger.debug(f"\n\tDownload {self.label} coordinates from Simbad...")
             self.simbad_table = simbadQuerier.query_object(astroquery_label)
             self.simbad_table.write(os.path.join(cache_location,f"{cache_file}.ecsv"), overwrite=True)
 
