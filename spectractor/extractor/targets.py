@@ -322,7 +322,7 @@ class Star(Target):
             dec_key = "DEC"
             redshift_key = "Z_VALUE"
         if self.simbad_table is not None:
-            if self.verbose or True:
+            if self.verbose:
                 self.my_logger.info(f'\n\tSimbad:\n{self.simbad_table}')
             if _USE_NEW_SIMBAD:
                 self.radec_position = SkyCoord(self.simbad_table[ra_key][0], self.simbad_table[dec_key][0], unit="deg")
@@ -332,8 +332,8 @@ class Star(Target):
                 )
         else:
             raise RuntimeError(f"Target {self.label} not found in Simbad")
-        if not np.ma.is_masked(self.simbad_table[redshift_key]):
-            self.redshift = float(self.simbad_table[redshift_key])
+        if not np.ma.is_masked(self.simbad_table[redshift_key][0]):
+            self.redshift = float(self.simbad_table[redshift_key][0])
         else:
             self.redshift = 0
         self.get_radec_position_after_pm(date_obs="J2000")
