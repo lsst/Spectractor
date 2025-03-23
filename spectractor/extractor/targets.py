@@ -5,11 +5,13 @@ import astropy.units as u
 from astropy.time import Time
 from astroquery.simbad import SimbadClass
 from astropy.io import ascii
+import astropy.config
 
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import numpy as np
 import os
+import shutil
 
 from spectractor import parameters
 from spectractor.config import set_logger
@@ -27,8 +29,7 @@ else:
 
 
 def _get_cache_dir():
-    cache = os.path.join(os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-                         "tests", "data", "cache", "astropy", "astroquery", "Simbad")
+    cache = os.path.join(astropy.config.get_cache_dir(), "astroquery", "Simbad")
     os.makedirs(cache, exist_ok=True)
     return cache
 
@@ -39,9 +40,8 @@ def _get_cache_file(tag):
 
 
 def _clean_cache_dir():
-    cache = os.path.join(os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-                         "tests", "data", "cache", "astropy", "astroquery", "Simbad")
-    os.rmdir(cache)
+    cache = _get_cache_dir()
+    shutil.rmtree(cache)
 
 
 def load_target(label, verbose=False):
@@ -294,7 +294,7 @@ class Star(Target):
 
         cache_location = _get_cache_dir()
         cache_file = _get_cache_file(astroquery_label)
-        if f"{cache_file}.ecsv" in os.listdir(cache_location):
+        if os.path.exists(os.path.join(cache_location, f"{cache_file}.ecsv")):
             self.my_logger.debug(f"\n\tLoad {self.label} coordinates from cached file {cache_file}.ecsv")
             self.simbad_table = ascii.read(os.path.join(cache_location, f"{cache_file}.ecsv"))
         else:
