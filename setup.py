@@ -1,5 +1,6 @@
 from setuptools import setup
 import os
+import shutil
 import re
 
 reqs = []
@@ -13,6 +14,16 @@ if os.getenv('READTHEDOCS') and 'mpi4py' in reqs:
 
 with open('README.md') as file:
     long_description = file.read()
+
+try:
+    import astropy
+    astropy_cache_dir = astropy.config.get_cache_dir()
+except ImportError:
+    astropy_cache_dir = os.path.join(f"{os.path.expanduser('~')}", ".astropy", "cache")
+os.makedirs(os.path.join(astropy_cache_dir, "astroquery", "Simbad"), exist_ok=True)
+shutil.copytree("./tests/data/cache/astropy/astroquery/Simbad",
+                os.path.join(astropy_cache_dir, "astroquery", "Simbad"),
+                dirs_exist_ok=True)
 
 # cf. http://stackoverflow.com/questions/458550/standard-way-to-embed-version-into-python-package
 version_file = os.path.join('spectractor', '_version.py')
