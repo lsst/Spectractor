@@ -28,4 +28,7 @@ config.log
 tests/.tests/
 *__pycache__/
 _build.*
+*.pickle
+*.ecsv
+*cache/*
 
