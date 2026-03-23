@@ -1,5 +1,5 @@
 build() {
-   python setup.py nosetests
+   pytest 
    default_build
 }
 
