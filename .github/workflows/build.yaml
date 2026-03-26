@@ -16,7 +16,7 @@ jobs:
 
       - uses: conda-incubator/setup-miniconda@v2
         with:
-          python-version: 3.8
+          python-version: '3.10'
           channels: conda-forge,defaults
           channel-priority: strict
           show-channel-urls: true
@@ -25,7 +25,7 @@ jobs:
         # Might be quicker to install rubin-env plus any necessary additions.
         shell: bash -l {0}
         run: |
-          conda install -y -q numpy scipy matplotlib pandas llvmlite numba astropy photutils astroquery coloredlogs scikit-image h5py emcee tqdm schwimmbad iminuit coverage configparser coveralls pysynphot deprecated pyyaml nose
+          conda install -y -q 'setuptools<70' 'numpy<1.22' scipy 'matplotlib<3.7' pandas llvmlite numba astropy 'photutils<1.5' astroquery coloredlogs scikit-image h5py emcee tqdm schwimmbad iminuit coverage configparser coveralls pysynphot deprecated pyyaml 'pytest<8.2'
 
       - name: List installed packages
         shell: bash -l {0}
@@ -38,12 +38,12 @@ jobs:
         run: |
           pip install -v -e .
 
-      - name: Run nosetests
+      - name: Run pytest
         shell: bash -l {0}
         run: |
-          python setup.py nosetests
+          pytest --log-cli-level=INFO tests
 
       - name: Run full chain
         shell: bash -l {0}
         run: |
-          nosetests tests/run_full_chain.py --all --debug --detailed-errors --verbose --process-restartworker --with-coverage --cover-package=spectractor
+          pytest tests/test_fullchain.py --log-cli-level=INFO --cov --cov-report lcov
