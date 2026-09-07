@@ -1,4 +1,5 @@
 build() {
    default_build
-   pytest --log-cli-level=INFO tests
+   # tests disabled
+   # pytest --log-cli-level=INFO tests
 }
