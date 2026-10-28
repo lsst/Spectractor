@@ -18,6 +18,8 @@ import os  # noqa: E402
 import numpy as np  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import unittest  # noqa: E402
+import pytest  # noqa: E402
+from pyvo.dal.exceptions import DALServiceError  # noqa: E402
 import astropy.config  # noqa: E402
 
 
@@ -98,6 +100,7 @@ def make_image():
              psf_poly_params=PSF_POLY_PARAMS_TRUTH, with_stars=False, with_rotation=True, with_noise=False)
 
 
+@pytest.mark.xfail(raises=DALServiceError, reason="Simbad queries are not cached and need network access")
 @unittest.skipIf(uvspec_available() is False, 'Skipping to avoid libradtran dependency')
 @astropy.config.set_temp_cache(os.path.join(os.path.abspath(os.path.dirname(__file__)), "data", "cache"))
 def test_ctio_fullchain():
