@@ -11,6 +11,8 @@ from spectractor.simulation.simulator import (Atmosphere, AtmosphereGrid)  # noq
 from spectractor.config import load_config  # noqa: E402
 import os  # noqa: E402
 import unittest  # noqa: E402
+import pytest  # noqa: E402
+from pyvo.dal.exceptions import DALServiceError  # noqa: E402
 
 
 # TODO: DM-33441 Fix broken spectractor tests
@@ -49,6 +51,7 @@ def test_atmosphere():
     assert np.max(transmission(lambdas)) < 1 and np.min(transmission(lambdas)) >= 0
 
 
+@pytest.mark.xfail(raises=DALServiceError, reason="Simbad queries are not cached and need network access")
 @unittest.skipIf(uvspec_available() is False, 'Skipping to avoid libradtran dependency')
 def test_simulator():
     file_names = ['tests/data/reduc_20170530_134_spectrum.fits']

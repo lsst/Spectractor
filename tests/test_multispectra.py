@@ -7,6 +7,8 @@ from spectractor.tools import uvspec_available  # noqa: E402
 import numpy as np  # noqa: E402
 import os  # noqa: E402
 import unittest  # noqa: E402
+import pytest  # noqa: E402
+from pyvo.dal.exceptions import DALServiceError  # noqa: E402
 import astropy.config  # noqa: E402
 
 
@@ -15,6 +17,7 @@ PWV = 5
 VAOD = 0.05
 ANGEXP = 1.2
 
+@pytest.mark.xfail(raises=DALServiceError, reason="Simbad queries are not cached and need network access")
 @unittest.skipIf(uvspec_available() is False, 'Skipping to avoid libradtran dependency')
 @astropy.config.set_temp_cache(os.path.join(os.path.abspath(os.path.dirname(__file__)), "data", "cache"))
 def test_multispectra():
